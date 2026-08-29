@@ -263,8 +263,8 @@ async fn try_verify_apply_patch_args(
             } => {
                 let ApplyPatchFileUpdate {
                     unified_diff,
+                    original_content,
                     content: contents,
-                    ..
                 } = unified_diff_from_chunks_with_mode(
                     &path,
                     &chunks,
@@ -273,18 +273,25 @@ async fn try_verify_apply_patch_args(
                     sandbox,
                 )
                 .await?;
+                let move_path = move_path
+                    .map(|path| effective_cwd.join(&path.to_string_lossy()))
+                    .transpose()?;
+                if move_path.is_none() && contents == original_content {
+                    continue;
+                }
                 changes.insert(
                     path,
                     ApplyPatchFileChange::Update {
                         unified_diff,
-                        move_path: move_path
-                            .map(|path| effective_cwd.join(&path.to_string_lossy()))
-                            .transpose()?,
+                        move_path,
                         new_content: contents,
                     },
                 );
             }
         }
+    }
+    if changes.is_empty() {
+        return Err(ApplyPatchError::NoFilesModified);
     }
     Ok(ApplyPatchAction {
         changes,

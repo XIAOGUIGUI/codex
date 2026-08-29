@@ -276,3 +276,88 @@ g
 "#
     );
 }
+
+#[tokio::test]
+async fn test_apply_patch_preserves_utf8_bom_and_crlf() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("bom.txt");
+    fs::write(&path, b"\xef\xbb\xbffoo\r\n\xe4\xb8\xad\xe6\x96\x87\r\n").unwrap();
+    let patch = wrap_patch(&format!(
+        "*** Update File: {}\n@@\n-foo\n+bar\n \u{4e2d}\u{6587}",
+        path.display()
+    ));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    apply_patch(
+        &patch,
+        &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        fs::read(path).unwrap(),
+        b"\xef\xbb\xbfbar\r\n\xe4\xb8\xad\xe6\x96\x87\r\n"
+    );
+}
+
+#[tokio::test]
+async fn test_apply_patch_rejects_leading_whitespace_mismatch_without_writing() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("indent.py");
+    let original = b"    if ready:\n        run()\n";
+    fs::write(&path, original).unwrap();
+    let patch = wrap_patch(&format!(
+        "*** Update File: {}\n@@\n   if ready:\n+      prepare()\n       run()",
+        path.display()
+    ));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = apply_patch(
+        &patch,
+        &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("Failed to find expected lines"));
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[tokio::test]
+async fn test_apply_patch_rejects_utf16_without_writing() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("utf16.txt");
+    let original = b"\xff\xfef\0o\0o\0\r\0\n\0";
+    fs::write(&path, original).unwrap();
+    let patch = wrap_patch(&format!(
+        "*** Update File: {}\n@@\n-foo\n+bar",
+        path.display()
+    ));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = apply_patch(
+        &patch,
+        &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("UTF-16 little-endian"));
+    assert_eq!(fs::read(path).unwrap(), original);
+}
