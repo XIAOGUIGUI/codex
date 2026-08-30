@@ -191,6 +191,7 @@ enum ParseMode {
 }
 
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
+    let patch = patch.strip_prefix('\u{feff}').unwrap_or(patch);
     let lines: Vec<&str> = patch.trim().lines().collect();
     let patch_lines = match mode {
         ParseMode::Strict => check_patch_boundaries_strict(&lines)?,
@@ -422,6 +423,19 @@ fn test_parse_patch() {
                 context_line_indices: vec![(0, 0)],
                 is_end_of_file: false,
             }],
+        }]
+    );
+}
+
+#[test]
+fn test_parse_patch_accepts_utf8_bom() {
+    assert_eq!(
+        parse_patch("\u{feff}*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch")
+            .unwrap()
+            .hunks,
+        vec![AddFile {
+            path: PathBuf::from("foo"),
+            contents: "hi\n".to_string(),
         }]
     );
 }

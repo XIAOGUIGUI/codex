@@ -63,9 +63,9 @@ pub const CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR: &str =
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ApplyPatchFileUpdateMode {
     /// Preserve the historical behavior of normalizing updated files to LF.
-    #[default]
     NormalizeToLf,
     /// Preserve existing line endings and use the file's preferred ending for new lines.
+    #[default]
     PreserveLineEndings,
 }
 
@@ -90,8 +90,9 @@ impl Default for ApplyPatchOptions {
 #[doc(hidden)]
 pub fn apply_patch_file_update_mode_from_env() -> ApplyPatchFileUpdateMode {
     match std::env::var(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR).as_deref() {
-        Ok("1") => ApplyPatchFileUpdateMode::PreserveLineEndings,
-        _ => ApplyPatchFileUpdateMode::NormalizeToLf,
+        Ok("0") => ApplyPatchFileUpdateMode::NormalizeToLf,
+        Ok("1") | Err(_) => ApplyPatchFileUpdateMode::PreserveLineEndings,
+        Ok(_) => ApplyPatchFileUpdateMode::default(),
     }
 }
 
@@ -112,6 +113,9 @@ pub enum ApplyPatchError {
         "patch detected without explicit call to apply_patch. Rerun as [\"apply_patch\", \"<patch>\"]"
     )]
     ImplicitInvocation,
+    /// The patch was valid but would not change any file contents.
+    #[error("No files were modified.")]
+    NoFilesModified,
 }
 
 impl From<std::io::Error> for ApplyPatchError {
@@ -691,6 +695,9 @@ async fn apply_hunks_to_files(
                     };
                     modified.push(affected_path);
                 } else {
+                    if new_contents == original_contents {
+                        continue;
+                    }
                     try_write!(
                         fs.write_file(
                             &path_uri,
@@ -717,6 +724,9 @@ async fn apply_hunks_to_files(
                 }
             }
         }
+    }
+    if added.is_empty() && modified.is_empty() && deleted.is_empty() {
+        anyhow::bail!("No files were modified.");
     }
     Ok(AffectedPaths {
         added,
