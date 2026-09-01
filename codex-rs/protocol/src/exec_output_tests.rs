@@ -13,6 +13,32 @@ fn test_utf8_shell_output() {
 }
 
 #[test]
+fn test_utf16le_shell_output_with_bom() {
+    assert_eq!(
+        decode_shell_output(b"\xFF\xFE\x2D\x4E\x87\x65\xA1\x5B\x79\x62"),
+        "中文审批"
+    );
+}
+
+#[test]
+fn test_utf16be_shell_output_with_bom() {
+    assert_eq!(
+        decode_shell_output(b"\xFE\xFF\x4E\x2D\x65\x87\x5B\xA1\x62\x79"),
+        "中文审批"
+    );
+}
+
+#[test]
+fn test_binary_shell_output_is_omitted() {
+    let bytes = b"MZ\0\0binary payload";
+
+    assert_eq!(
+        decode_shell_output(bytes),
+        format!("[Binary output: {} bytes omitted]", bytes.len())
+    );
+}
+
+#[test]
 fn test_cp1251_shell_output() {
     // VS Code shells on Windows frequently surface CP1251 bytes for Cyrillic text.
     assert_eq!(decode_shell_output(b"\xEF\xF0\xE8\xEC\xE5\xF0"), "пример");

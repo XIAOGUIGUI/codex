@@ -331,9 +331,17 @@ enum CrLfApplyPatchModelOutput {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_normalizes_crlf_without_preserve_line_endings_feature() -> Result<()> {
+async fn apply_patch_normalizes_crlf_when_preserve_line_endings_feature_is_disabled() -> Result<()>
+{
     assert_apply_patch_crlf_update(
-        |builder| builder,
+        |builder| {
+            builder.with_config(|config| {
+                config
+                    .features
+                    .disable(Feature::ApplyPatchPreserveLineEndings)
+                    .expect("feature should be disabled");
+            })
+        },
         CrLfApplyPatchModelOutput::CustomTool,
         "after\n",
     )
@@ -341,16 +349,9 @@ async fn apply_patch_normalizes_crlf_without_preserve_line_endings_feature() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_preserves_crlf_with_preserve_line_endings_feature() -> Result<()> {
+async fn apply_patch_preserves_crlf_by_default() -> Result<()> {
     assert_apply_patch_crlf_update(
-        |builder| {
-            builder.with_config(|config| {
-                config
-                    .features
-                    .enable(Feature::ApplyPatchPreserveLineEndings)
-                    .expect("feature should be enabled");
-            })
-        },
+        |builder| builder,
         CrLfApplyPatchModelOutput::CustomTool,
         "after\r\n",
     )
@@ -358,19 +359,7 @@ async fn apply_patch_preserves_crlf_with_preserve_line_endings_feature() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_heredoc_normalizes_crlf_without_preserve_line_endings_feature()
--> Result<()> {
-    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
-    assert_apply_patch_crlf_update(
-        |builder| builder,
-        CrLfApplyPatchModelOutput::ExecCommandViaHeredoc,
-        "after\n",
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_heredoc_preserves_crlf_with_preserve_line_endings_feature() -> Result<()>
+async fn apply_patch_shell_heredoc_normalizes_crlf_when_preserve_feature_is_disabled() -> Result<()>
 {
     skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
     assert_apply_patch_crlf_update(
@@ -378,10 +367,21 @@ async fn apply_patch_shell_heredoc_preserves_crlf_with_preserve_line_endings_fea
             builder.with_config(|config| {
                 config
                     .features
-                    .enable(Feature::ApplyPatchPreserveLineEndings)
-                    .expect("feature should be enabled");
+                    .disable(Feature::ApplyPatchPreserveLineEndings)
+                    .expect("feature should be disabled");
             })
         },
+        CrLfApplyPatchModelOutput::ExecCommandViaHeredoc,
+        "after\n",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_shell_heredoc_preserves_crlf_by_default() -> Result<()> {
+    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
+    assert_apply_patch_crlf_update(
+        |builder| builder,
         CrLfApplyPatchModelOutput::ExecCommandViaHeredoc,
         "after\r\n",
     )
@@ -490,6 +490,35 @@ async fn apply_patch_cli_preserves_distinct_updated_paths() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_cli_verifies_all_files_before_writing() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness().await?;
+    harness.write_file("first.txt", "first before\n").await?;
+    harness.write_file("second.txt", "second before\n").await?;
+
+    let patch = "*** Begin Patch\n*** Update File: first.txt\n@@\n-first before\n+first after\n*** Update File: second.txt\n@@\n-missing context\n+second after\n*** End Patch";
+    let call_id = "apply-preverify-multiple-files";
+    mount_apply_patch(&harness, call_id, patch, "done").await;
+
+    harness.submit("please apply both updates").await?;
+
+    let out = harness.apply_patch_output(call_id).await;
+    assert!(
+        out.contains("apply_patch verification failed"),
+        "expected verification failure: {out}"
+    );
+    assert!(out.contains("Failed to find expected lines in"));
+    assert_eq!(harness.read_file_text("first.txt").await?, "first before\n");
+    assert_eq!(
+        harness.read_file_text("second.txt").await?,
+        "second before\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_rejects_duplicate_resolved_paths() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -562,7 +591,7 @@ async fn apply_patch_cli_moves_file_to_new_directory() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_cli_updates_file_appends_trailing_newline() -> Result<()> {
+async fn apply_patch_cli_updates_file_preserves_missing_trailing_newline() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -578,8 +607,7 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline() -> Result<()> {
     harness.submit("apply newline patch").await?;
 
     let contents = harness.read_file_text("no_newline.txt").await?;
-    assert!(contents.ends_with('\n'));
-    assert_eq!(contents, "first line\nsecond line\n");
+    assert_eq!(contents, "first line\nsecond line");
     Ok(())
 }
 

@@ -3,6 +3,7 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadFileOptions;
 use codex_utils_path_uri::PathUri;
 use similar::TextDiff;
+use std::cmp::Reverse;
 use std::io;
 
 use crate::ApplyPatchError;
@@ -138,9 +139,17 @@ fn compute_replacements(
             ) {
                 line_index = idx + 1;
             } else {
-                return Err(ApplyPatchError::ComputeReplacements(format!(
-                    "Failed to find context '{ctx_line}' in {path}"
-                )));
+                return Err(ApplyPatchError::ComputeReplacements(
+                    format_sequence_search_failure(
+                        format!(
+                            "Failed to find context {} in {path}",
+                            format_line_for_diagnostic(ctx_line)
+                        ),
+                        original_lines,
+                        std::slice::from_ref(ctx_line),
+                        line_index,
+                    ),
+                ));
             }
         }
 
@@ -239,17 +248,118 @@ fn compute_replacements(
             }
             line_index = start_idx + pattern.len();
         } else {
-            return Err(ApplyPatchError::ComputeReplacements(format!(
-                "Failed to find expected lines in {}:\n{}",
-                path,
-                chunk.old_lines.join("\n"),
-            )));
+            return Err(ApplyPatchError::ComputeReplacements(
+                format_sequence_search_failure(
+                    format!("Failed to find expected lines in {path}"),
+                    original_lines,
+                    pattern,
+                    line_index,
+                ),
+            ));
         }
     }
 
     replacements.sort_by_key(|(index, _, _)| *index);
 
     Ok(replacements)
+}
+
+const MAX_DIAGNOSTIC_LINE_CHARS: usize = 160;
+
+fn format_sequence_search_failure(
+    header: String,
+    lines: &[String],
+    pattern: &[String],
+    search_start: usize,
+) -> String {
+    let search_line = search_start.saturating_add(1);
+    let Some((candidate_start, whitespace_matches)) = (search_start..lines.len())
+        .map(|candidate_start| {
+            let candidate = &lines[candidate_start..];
+            let comparable_lines = pattern.len().min(candidate.len());
+            let whitespace_matches = pattern
+                .iter()
+                .zip(candidate)
+                .filter(|(expected, actual)| expected.trim() == actual.trim())
+                .count();
+            let exact_matches = pattern
+                .iter()
+                .zip(candidate)
+                .filter(|(expected, actual)| expected == actual)
+                .count();
+            let matching_prefix = pattern
+                .iter()
+                .zip(candidate)
+                .take(comparable_lines)
+                .take_while(|(expected, actual)| expected.trim() == actual.trim())
+                .count();
+            (
+                candidate_start,
+                whitespace_matches,
+                exact_matches,
+                matching_prefix,
+            )
+        })
+        .max_by_key(
+            |(candidate_start, whitespace_matches, exact_matches, matching_prefix)| {
+                (
+                    *whitespace_matches,
+                    *exact_matches,
+                    *matching_prefix,
+                    Reverse(*candidate_start),
+                )
+            },
+        )
+        .map(
+            |(candidate_start, whitespace_matches, _exact_matches, _matching_prefix)| {
+                (candidate_start, whitespace_matches)
+            },
+        )
+    else {
+        return format!(
+            "{header}\nSearch started at line {search_line}, but the file has no candidate lines at or after that position."
+        );
+    };
+
+    let mismatch_index = pattern
+        .iter()
+        .zip(&lines[candidate_start..])
+        .position(|(expected, actual)| expected.trim_end() != actual.trim_end())
+        .unwrap_or_else(|| pattern.len().min(lines.len() - candidate_start));
+    let expected = pattern
+        .get(mismatch_index)
+        .map_or("<end of pattern>", String::as_str);
+    let actual = lines
+        .get(candidate_start + mismatch_index)
+        .map_or("<end of file>", String::as_str);
+    let candidate_line = candidate_start + 1;
+    let mismatch_line = candidate_start + mismatch_index + 1;
+
+    format!(
+        "{header}\nSearch started at line {search_line}. Closest candidate starts at line {candidate_line} and matches {whitespace_matches}/{} lines when surrounding whitespace is ignored.\nFirst mismatch at line {mismatch_line}:\nexpected: {}\nactual:   {}",
+        pattern.len(),
+        format_line_for_diagnostic(expected),
+        format_line_for_diagnostic(actual),
+    )
+}
+
+fn format_line_for_diagnostic(line: &str) -> String {
+    let mut rendered = String::new();
+    let mut chars = line.chars();
+    for character in chars.by_ref().take(MAX_DIAGNOSTIC_LINE_CHARS) {
+        match character {
+            ' ' => rendered.push('·'),
+            '\t' => rendered.push_str("→\\t"),
+            '\r' => rendered.push_str("\\r"),
+            '\n' => rendered.push_str("\\n"),
+            character if character.is_control() => rendered.extend(character.escape_default()),
+            character => rendered.push(character),
+        }
+    }
+    if chars.next().is_some() {
+        rendered.push('…');
+    }
+    format!("`{rendered}`")
 }
 
 /// Apply the `(start_index, old_len, new_lines)` replacements to `original_lines`,
