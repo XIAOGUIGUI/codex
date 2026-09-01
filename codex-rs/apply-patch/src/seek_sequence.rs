@@ -27,23 +27,40 @@ pub(crate) fn seek_sequence(
     if pattern.len() > lines.len() {
         return None;
     }
-    let search_start = if eof && lines.len() >= pattern.len() {
-        let eof_start = lines.len() - pattern.len();
-        match update_file_mode {
-            crate::ApplyPatchFileUpdateMode::NormalizeToLf => eof_start,
-            crate::ApplyPatchFileUpdateMode::PreserveLineEndings => eof_start.max(start),
-        }
-    } else {
-        start
+
+    let final_start = lines.len() - pattern.len();
+    let can_match_at_eof = match update_file_mode {
+        crate::ApplyPatchFileUpdateMode::NormalizeToLf => true,
+        crate::ApplyPatchFileUpdateMode::PreserveLineEndings => final_start >= start,
     };
+    if eof
+        && can_match_at_eof
+        && sequence_matches_in_range(lines, pattern, final_start, final_start).is_some()
+    {
+        return Some(final_start);
+    }
+
+    sequence_matches_in_range(lines, pattern, start, final_start)
+}
+
+fn sequence_matches_in_range(
+    lines: &[String],
+    pattern: &[String],
+    search_start: usize,
+    search_end: usize,
+) -> Option<usize> {
+    if search_start > search_end {
+        return None;
+    }
+
     // Exact match first.
-    for i in search_start..=lines.len().saturating_sub(pattern.len()) {
+    for i in search_start..=search_end {
         if lines[i..i + pattern.len()] == *pattern {
             return Some(i);
         }
     }
     // Then rstrip match.
-    for i in search_start..=lines.len().saturating_sub(pattern.len()) {
+    for i in search_start..=search_end {
         let mut ok = true;
         for (p_idx, pat) in pattern.iter().enumerate() {
             if lines[i + p_idx].trim_end() != pat.trim_end() {
@@ -84,7 +101,7 @@ pub(crate) fn seek_sequence(
             .collect::<String>()
     }
 
-    for i in search_start..=lines.len().saturating_sub(pattern.len()) {
+    for i in search_start..=search_end {
         let mut ok = true;
         for (p_idx, pat) in pattern.iter().enumerate() {
             if normalise(&lines[i + p_idx]) != normalise(pat) {
@@ -199,6 +216,57 @@ mod tests {
                 /*start*/ 0,
                 /*eof*/ false,
                 ApplyPatchFileUpdateMode::NormalizeToLf,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_eof_match_prefers_file_end() {
+        let lines = to_vec(&["target", "middle", "target   "]);
+        let pattern = to_vec(&["target"]);
+
+        assert_eq!(
+            seek_sequence(
+                &lines,
+                &pattern,
+                /*start*/ 0,
+                /*eof*/ true,
+                ApplyPatchFileUpdateMode::PreserveLineEndings,
+            ),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn test_eof_match_falls_back_to_search_start() {
+        let lines = to_vec(&["before", "target", "not the target"]);
+        let pattern = to_vec(&["target"]);
+
+        assert_eq!(
+            seek_sequence(
+                &lines,
+                &pattern,
+                /*start*/ 1,
+                /*eof*/ true,
+                ApplyPatchFileUpdateMode::PreserveLineEndings,
+            ),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_eof_match_does_not_move_before_search_start_in_preserve_mode() {
+        let lines = to_vec(&["target"]);
+        let pattern = to_vec(&["target"]);
+
+        assert_eq!(
+            seek_sequence(
+                &lines,
+                &pattern,
+                /*start*/ 1,
+                /*eof*/ true,
+                ApplyPatchFileUpdateMode::PreserveLineEndings,
             ),
             None
         );

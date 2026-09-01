@@ -330,7 +330,11 @@ async fn test_apply_patch_rejects_leading_whitespace_mismatch_without_writing() 
     .await
     .unwrap_err();
 
-    assert!(error.to_string().contains("Failed to find expected lines"));
+    let message = error.to_string();
+    assert!(message.contains("Failed to find expected lines"));
+    assert!(message.contains("Closest candidate starts at line 1"));
+    assert!(message.contains("expected: `··if·ready:`"));
+    assert!(message.contains("actual:   `····if·ready:`"));
     assert_eq!(fs::read(path).unwrap(), original);
 }
 
@@ -360,4 +364,113 @@ async fn test_apply_patch_rejects_utf16_without_writing() {
 
     assert!(error.to_string().contains("UTF-16 little-endian"));
     assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[tokio::test]
+async fn test_apply_patch_preserves_missing_trailing_newline() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("unterminated.txt");
+    fs::write(&path, b"line1\nline2").unwrap();
+    let patch = wrap_patch(&format!(
+        "*** Update File: {}\n@@\n-line1\n+LINE1\n line2",
+        path.display()
+    ));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    apply_patch(
+        &patch,
+        &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(fs::read(path).unwrap(), b"LINE1\nline2");
+}
+
+#[tokio::test]
+async fn test_apply_patch_appends_without_changing_missing_trailing_newline() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("append-unterminated.txt");
+    fs::write(&path, b"line1\nline2").unwrap();
+    let patch = wrap_patch(&format!(
+        "*** Update File: {}\n@@\n line2\n+line3\n*** End of File",
+        path.display()
+    ));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    apply_patch(
+        &patch,
+        &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(fs::read(path).unwrap(), b"line1\nline2\nline3");
+}
+
+#[tokio::test]
+async fn test_apply_patch_rejects_no_op_without_adding_trailing_newline() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("no-op-unterminated.txt");
+    let original = b"line1\nline2";
+    fs::write(&path, original).unwrap();
+    let patch = wrap_patch(&format!(
+        "*** Update File: {}\n@@\n-line2\n+line2",
+        path.display()
+    ));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = apply_patch(
+        &patch,
+        &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("No files were modified"));
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[tokio::test]
+async fn test_apply_patch_bounds_mismatch_diagnostics() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("bounded-diagnostic.txt");
+    fs::write(&path, b"actual\n").unwrap();
+    let long_expected = "x".repeat(1_000);
+    let patch = wrap_patch(&format!(
+        "*** Update File: {}\n@@\n-{long_expected}\n+replacement",
+        path.display()
+    ));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = apply_patch(
+        &patch,
+        &PathUri::from_host_native_path(dir.path()).expect("absolute test path"),
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    .unwrap_err();
+    let message = error.to_string();
+
+    assert!(message.contains('…'));
+    assert!(message.len() < long_expected.len());
 }

@@ -141,6 +141,22 @@ fn derive_exec_args() {
         test_powershell_shell.derive_exec_args("echo hello", /*use_login_shell*/ true),
         vec!["pwsh.exe", "-Command", "echo hello"]
     );
+
+    let complex_script = r#"$env:TITLE = '审批人'
+$pattern = '[\]\)]'
+@'
+中文 "quoted"
+'@
+"{0}" -f $env:TITLE"#;
+    assert_eq!(
+        test_powershell_shell.derive_exec_args(complex_script, /*use_login_shell*/ false),
+        vec![
+            "pwsh.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            complex_script.to_string(),
+        ]
+    );
 }
 
 #[tokio::test]

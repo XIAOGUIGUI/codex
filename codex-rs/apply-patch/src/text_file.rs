@@ -79,9 +79,10 @@ impl SourceFile {
     /// Rebuilds the file from source-ordered, non-overlapping replacements.
     ///
     /// Unchanged lines retain their original endings, inserted lines use the
-    /// preferred ending, and every resulting line receives an ending to match
-    /// apply-patch's historical trailing-newline behavior.
+    /// preferred ending, and the resulting file preserves whether the source
+    /// ended with a line terminator.
     pub(super) fn apply_replacements(&mut self, replacements: &[Replacement]) {
+        let source_was_terminated = self.lines.last().is_some_and(|line| line.ending.is_some());
         let mut source_lines = std::mem::take(&mut self.lines).into_iter();
         let mut new_lines = Vec::new();
         let mut source_index = 0;
@@ -101,9 +102,15 @@ impl SourceFile {
         new_lines.extend(source_lines);
         self.lines = new_lines;
 
-        // Updates have historically added a trailing newline. This also gives
-        // an unterminated last line an ending if an insertion moved it inward.
-        for line in &mut self.lines {
+        // Every non-final line needs a terminator, including a source line that
+        // used to be the unterminated final line but moved inward. The final
+        // line keeps the source file's termination state.
+        let final_line_index = self.lines.len().saturating_sub(1);
+        for (index, line) in self.lines.iter_mut().enumerate() {
+            if index == final_line_index && !source_was_terminated {
+                line.ending = None;
+                continue;
+            }
             line.ending.get_or_insert(self.preferred_ending);
         }
     }

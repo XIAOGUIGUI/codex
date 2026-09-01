@@ -12,6 +12,8 @@ use encoding_rs::IBM866;
 use encoding_rs::WINDOWS_1252;
 use std::time::Duration;
 
+const BINARY_DETECTION_SAMPLE_BYTES: usize = 8 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct StreamOutput<T: Clone> {
     pub text: T,
@@ -65,12 +67,43 @@ pub fn bytes_to_string_smart(bytes: &[u8]) -> String {
         return String::new();
     }
 
+    if let Some(decoded) = decode_utf16_with_bom(bytes) {
+        return decoded;
+    }
+
+    if bytes
+        .iter()
+        .take(BINARY_DETECTION_SAMPLE_BYTES)
+        .any(|byte| *byte == 0)
+    {
+        return format!("[Binary output: {} bytes omitted]", bytes.len());
+    }
+
     if let Ok(utf8_str) = std::str::from_utf8(bytes) {
         return utf8_str.to_owned();
     }
 
     let encoding = detect_encoding(bytes);
     decode_bytes(bytes, encoding)
+}
+
+fn decode_utf16_with_bom(bytes: &[u8]) -> Option<String> {
+    let (endianness, contents) = if let Some(contents) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        (u16::from_le_bytes as fn([u8; 2]) -> u16, contents)
+    } else if let Some(contents) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        (u16::from_be_bytes as fn([u8; 2]) -> u16, contents)
+    } else {
+        return None;
+    };
+    let mut chunks = contents.chunks_exact(2);
+    let code_units = chunks
+        .by_ref()
+        .map(|chunk| endianness([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    if !chunks.remainder().is_empty() {
+        return None;
+    }
+    String::from_utf16(&code_units).ok()
 }
 
 // Windows-1252 reassigns a handful of 0x80-0x9F slots to smart punctuation (curly quotes, dashes,
