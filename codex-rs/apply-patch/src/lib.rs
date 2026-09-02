@@ -4,6 +4,7 @@ mod parser;
 mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
+mod structured_file_change;
 mod text_file;
 
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WriteDisposition;
 use codex_exec_server::WriteFileOptions;
 use codex_utils_path_uri::PathUri;
 use codex_utils_path_uri::PathUriParseError;
@@ -27,6 +29,11 @@ use parser::ParseError::*;
 pub use parser::UpdateFileChunk;
 pub use parser::parse_patch;
 pub use streaming_parser::StreamingPatchParser;
+pub use structured_file_change::StructuredFileMutation;
+pub use structured_file_change::StructuredFileMutationKind;
+pub use structured_file_change::apply_structured_file_mutation;
+pub use structured_file_change::prepare_structured_edit;
+pub use structured_file_change::prepare_structured_write;
 use thiserror::Error;
 
 use file_update::AppliedPatch;
@@ -116,6 +123,9 @@ pub enum ApplyPatchError {
     /// The patch was valid but would not change any file contents.
     #[error("No files were modified.")]
     NoFilesModified,
+    /// A structured edit or write request could not be applied safely.
+    #[error("{0}")]
+    StructuredFileMutation(String),
 }
 
 impl From<std::io::Error> for ApplyPatchError {
@@ -524,6 +534,7 @@ async fn apply_hunks_to_files(
                         &path_uri,
                         contents.clone().into_bytes(),
                         follow_symlinks,
+                        WriteDisposition::Overwrite,
                         sandbox,
                     )
                     .await
@@ -636,6 +647,7 @@ async fn apply_hunks_to_files(
                             &dest_uri,
                             new_contents.clone().into_bytes(),
                             follow_symlinks,
+                            WriteDisposition::Overwrite,
                             sandbox,
                         )
                         .await
@@ -702,7 +714,10 @@ async fn apply_hunks_to_files(
                         fs.write_file(
                             &path_uri,
                             new_contents.clone().into_bytes(),
-                            WriteFileOptions { follow_symlinks },
+                            WriteFileOptions {
+                                follow_symlinks,
+                                disposition: WriteDisposition::Overwrite,
+                            },
                             sandbox,
                         )
                         .await
@@ -813,13 +828,17 @@ async fn write_file_with_missing_parent_retry(
     path: &PathUri,
     contents: Vec<u8>,
     follow_symlinks: bool,
+    disposition: WriteDisposition,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> anyhow::Result<()> {
     match fs
         .write_file(
             path,
             contents.clone(),
-            WriteFileOptions { follow_symlinks },
+            WriteFileOptions {
+                follow_symlinks,
+                disposition,
+            },
             sandbox,
         )
         .await
@@ -846,7 +865,10 @@ async fn write_file_with_missing_parent_retry(
             fs.write_file(
                 path,
                 contents,
-                WriteFileOptions { follow_symlinks },
+                WriteFileOptions {
+                    follow_symlinks,
+                    disposition,
+                },
                 sandbox,
             )
             .await
