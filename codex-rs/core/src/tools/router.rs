@@ -134,6 +134,10 @@ impl ToolRouter {
         self.registry.create_diff_consumer(tool_name)
     }
 
+    pub(crate) fn model_argument_bytes_limit(&self, name: &ToolName) -> Option<usize> {
+        self.registry.model_argument_bytes_limit(name)
+    }
+
     pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
         self.registry
             .supports_parallel_tool_calls(&call.tool_name)

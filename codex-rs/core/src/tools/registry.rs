@@ -53,6 +53,11 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    /// Caps serialized function arguments before the model response item enters history.
+    fn model_argument_bytes_limit(&self) -> Option<usize> {
+        None
+    }
+
     /// Whether this built-in control tool needs a structured tool-call event.
     fn is_builtin_control_tool(&self) -> bool {
         false
@@ -92,6 +97,11 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     /// Observes a tool result only after all PostToolUse hooks accept it.
     fn on_tool_result_accepted(&self, _invocation: &ToolInvocation, _result: &dyn ToolOutput) {}
 
+    /// Returns the stable hook identity and matcher aliases for this tool.
+    fn hook_tool_name(&self, invocation: &ToolInvocation) -> HookToolName {
+        function_hook_tool_name(invocation)
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -102,7 +112,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         };
 
         Some(PostToolUsePayload {
-            tool_name: function_hook_tool_name(invocation),
+            tool_name: self.hook_tool_name(invocation),
             tool_use_id: result.post_tool_use_id(&invocation.call_id),
             tool_input: result
                 .post_tool_use_input(&invocation.payload)
@@ -132,7 +142,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         };
 
         Some(PreToolUsePayload {
-            tool_name: function_hook_tool_name(invocation),
+            tool_name: self.hook_tool_name(invocation),
             tool_input: function_hook_tool_input(arguments),
         })
     }
@@ -465,6 +475,10 @@ impl ToolRegistry {
         name: &ToolName,
     ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         self.tool(name)?.create_diff_consumer()
+    }
+
+    pub(crate) fn model_argument_bytes_limit(&self, name: &ToolName) -> Option<usize> {
+        self.tool(name)?.model_argument_bytes_limit()
     }
 
     pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {
