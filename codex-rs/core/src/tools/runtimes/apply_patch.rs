@@ -17,6 +17,7 @@ use crate::tools::sandboxing::executor_windows_sandbox_level;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchOptions;
+use codex_apply_patch::StructuredFileMutation;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -55,6 +56,7 @@ pub struct ApplyPatchRequest {
 #[derive(Default)]
 pub struct ApplyPatchRuntime {
     committed_delta: AppliedPatchDelta,
+    structured_mutation: Option<StructuredFileMutation>,
 }
 
 #[derive(Debug)]
@@ -66,6 +68,13 @@ pub struct ApplyPatchRuntimeOutput {
 impl ApplyPatchRuntime {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn new_structured(mutation: StructuredFileMutation) -> Self {
+        Self {
+            committed_delta: AppliedPatchDelta::default(),
+            structured_mutation: Some(mutation),
+        }
     }
 
     pub fn committed_delta(&self) -> &AppliedPatchDelta {
@@ -174,26 +183,37 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let result = codex_apply_patch::apply_patch_with_options(
-            &req.action.patch,
-            ApplyPatchOptions {
-                update_file_mode: req.action.update_file_mode(),
-                // Only reject links when an otherwise-required sandbox was bypassed.
-                // Executor-managed sandboxes can have SandboxType::None.
-                follow_symlinks: attempt.sandbox_requested
-                    || !attempt.manager.should_sandbox(
-                        attempt.permissions,
-                        self.sandbox_preference(),
-                        attempt.enforce_managed_network,
-                    ),
-            },
-            &req.action.cwd,
-            &mut stdout,
-            &mut stderr,
-            fs.as_ref(),
-            sandbox.as_ref(),
-        )
-        .await;
+        let follow_symlinks = attempt.sandbox_requested
+            || !attempt.manager.should_sandbox(
+                attempt.permissions,
+                self.sandbox_preference(),
+                attempt.enforce_managed_network,
+            );
+        let result = if let Some(mutation) = self.structured_mutation.as_ref() {
+            codex_apply_patch::apply_structured_file_mutation(
+                mutation,
+                follow_symlinks,
+                &mut stdout,
+                &mut stderr,
+                fs.as_ref(),
+                sandbox.as_ref(),
+            )
+            .await
+        } else {
+            codex_apply_patch::apply_patch_with_options(
+                &req.action.patch,
+                ApplyPatchOptions {
+                    update_file_mode: req.action.update_file_mode(),
+                    follow_symlinks,
+                },
+                &req.action.cwd,
+                &mut stdout,
+                &mut stderr,
+                fs.as_ref(),
+                sandbox.as_ref(),
+            )
+            .await
+        };
         let stdout = String::from_utf8_lossy(&stdout).into_owned();
         let stderr = String::from_utf8_lossy(&stderr).into_owned();
         let failed = result.is_err();

@@ -20,8 +20,12 @@ pub(crate) async fn open_file(path: &Path) -> io::Result<tokio::fs::File> {
     imp::open_file(path.to_path_buf()).await
 }
 
-pub(crate) async fn write_file(path: &Path, contents: Vec<u8>) -> io::Result<()> {
-    imp::write_file(path.to_path_buf(), contents).await
+pub(crate) async fn write_file(
+    path: &Path,
+    contents: Vec<u8>,
+    disposition: crate::WriteDisposition,
+) -> io::Result<()> {
+    imp::write_file(path.to_path_buf(), contents, disposition).await
 }
 
 #[cfg(unix)]
