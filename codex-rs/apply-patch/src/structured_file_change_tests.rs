@@ -132,15 +132,21 @@ impl ExecutorFileSystem for GrowingAfterMetadataFileSystem {
 
 #[test]
 fn model_visible_paths_and_io_errors_are_bounded() {
+    let dir = tempdir().unwrap();
     let secret_suffix = "secret-path-component";
-    let long_path = format!("/{}-{secret_suffix}", "a".repeat(400));
-    let path = PathUri::from_host_native_path(std::path::Path::new(&long_path)).unwrap();
+    let long_path = dir
+        .path()
+        .join(format!("{}-{secret_suffix}", "a".repeat(400)));
+    let path = PathUri::from_host_native_path(&long_path).unwrap();
     let displayed = display_path(&path);
     assert_eq!(displayed.chars().count(), MAX_MODEL_VISIBLE_PATH_CHARS);
     assert!(displayed.ends_with('…'));
     assert!(!displayed.contains(secret_suffix));
 
-    let source = io::Error::new(io::ErrorKind::PermissionDenied, long_path);
+    let source = io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        long_path.to_string_lossy().into_owned(),
+    );
     let error = structured_io_error("Failed to inspect file", &path, source).to_string();
     assert!(!error.contains(secret_suffix));
     assert!(error.contains("PermissionDenied"));
