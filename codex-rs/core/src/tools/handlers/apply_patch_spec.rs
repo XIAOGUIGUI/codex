@@ -1,5 +1,9 @@
+use std::collections::BTreeMap;
+
 use codex_tools::FreeformTool;
 use codex_tools::FreeformToolFormat;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
 
 const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("../../../assets/tools/apply_patch.lark");
@@ -24,6 +28,41 @@ pub fn create_apply_patch_freeform_tool(include_environment_id: bool) -> ToolSpe
             syntax: "lark".to_string(),
             definition,
         },
+    })
+}
+
+/// Returns a standard function tool for providers that do not support custom
+/// grammar tools.
+pub fn create_apply_patch_function_tool(include_environment_id: bool) -> ToolSpec {
+    let mut properties = BTreeMap::from([(
+        "patch".to_string(),
+        JsonSchema::string(Some(
+            "Patch text to apply. You may provide a complete patch from `*** Begin Patch` through `*** End Patch`, or omit both outer markers and start directly with `*** Add File:`, `*** Update File:`, or `*** Delete File:`. Update hunks must start with `@@`, and every hunk body line must start with a space (context), `+` (added), or `-` (removed). Do not wrap the patch in Markdown or a command array."
+                .to_string(),
+        )),
+    )]);
+    if include_environment_id {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Environment id from <environment_context>. Omit to use the primary environment."
+                    .to_string(),
+            )),
+        );
+    }
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "apply_patch".to_string(),
+        description: "Apply a context-checked patch to files. This is a standard JSON function tool; pass the patch text in the `patch` field. The Codex host supplies omitted outer Begin/End markers."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["patch".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
     })
 }
 

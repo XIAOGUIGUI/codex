@@ -27,6 +27,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -83,6 +84,15 @@ use wiremock::matchers::path_regex;
 
 pub async fn apply_patch_harness() -> Result<TestCodexHarness> {
     apply_patch_harness_with(|builder| builder).await
+}
+
+pub async fn apply_patch_function_harness() -> Result<TestCodexHarness> {
+    apply_patch_harness_with(|builder| {
+        builder.with_model_info_override("gpt-5.5", |model_info| {
+            model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
+        })
+    })
+    .await
 }
 
 async fn apply_patch_harness_with(
@@ -241,6 +251,59 @@ pub async fn mount_apply_patch(
         ),
     )
     .await;
+}
+
+pub async fn mount_apply_patch_function(
+    harness: &TestCodexHarness,
+    call_id: &str,
+    patch: &str,
+    assistant_msg: &str,
+) {
+    let arguments = serde_json::to_string(&json!({ "patch": patch }))
+        .expect("apply_patch function arguments should serialize");
+    mount_sse_sequence(
+        harness.server(),
+        apply_patch_responses(call_id, &arguments, assistant_msg, |call_id, arguments| {
+            ev_function_call(call_id, "apply_patch", arguments)
+        }),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_function_call_creates_file_without_outer_markers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_function_harness().await?;
+    let call_id = "apply-patch-function-add-file";
+    let file_name = "function_tool_apply_patch.txt";
+    let patch = format!("*** Add File: {file_name}\n+function tool content");
+    mount_apply_patch_function(&harness, call_id, &patch, "apply_patch done").await;
+
+    harness
+        .test()
+        .submit_turn_with_permission_profile(
+            "apply the patch via a standard function tool",
+            PermissionProfile::Disabled,
+        )
+        .await?;
+
+    let output = harness.function_call_stdout(call_id).await;
+    let expected_pattern = format!(
+        r"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+Success. Updated the following files:
+A {file_name}
+?$"
+    );
+    assert_regex_match(&expected_pattern, output.as_str());
+    assert_eq!(
+        harness.read_file_text(file_name).await?,
+        "function tool content\n"
+    );
+
+    Ok(())
 }
 
 async fn mount_apply_patch_model_output(
