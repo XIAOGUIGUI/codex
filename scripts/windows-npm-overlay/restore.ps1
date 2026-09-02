@@ -42,13 +42,22 @@ function Assert-CodexNotRunning {
     }
 }
 
-if (-not $IsWindows) {
+function Resolve-BackupRoot {
+    $configuredRoot = [Environment]::GetEnvironmentVariable("CODEX_WINDOWS_PATCH_BACKUP_ROOT")
+    if (-not [string]::IsNullOrWhiteSpace($configuredRoot)) {
+        return [IO.Path]::GetFullPath($configuredRoot)
+    }
+
+    $userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    return Join-Path $userProfileDirectory ".codex\backups\windows-npm-overlay"
+}
+
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "This restore script supports Windows only."
 }
 
 if ([string]::IsNullOrWhiteSpace($BackupDirectory)) {
-    $userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-    $backupRoot = Join-Path $userProfileDirectory ".codex\backups\windows-npm-overlay"
+    $backupRoot = Resolve-BackupRoot
     $latestBackup = Get-ChildItem -LiteralPath $backupRoot -Directory -ErrorAction SilentlyContinue |
         Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "manifest.json") -PathType Leaf } |
         Sort-Object LastWriteTimeUtc -Descending |

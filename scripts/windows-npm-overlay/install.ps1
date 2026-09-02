@@ -126,7 +126,17 @@ function Copy-FileReplacing {
     [IO.File]::Copy($Source, $Destination, $true)
 }
 
-if (-not $IsWindows) {
+function Resolve-BackupRoot {
+    $configuredRoot = [Environment]::GetEnvironmentVariable("CODEX_WINDOWS_PATCH_BACKUP_ROOT")
+    if (-not [string]::IsNullOrWhiteSpace($configuredRoot)) {
+        return [IO.Path]::GetFullPath($configuredRoot)
+    }
+
+    $userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    return Join-Path $userProfileDirectory ".codex\backups\windows-npm-overlay"
+}
+
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "This overlay supports Windows only."
 }
 if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne
@@ -158,8 +168,7 @@ $codexSource = Join-Path $PayloadDirectory "codex.exe"
 $applyPatchSource = Join-Path $PayloadDirectory "apply_patch.exe"
 Assert-CodexNotRunning $codexTarget
 
-$userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-$backupRoot = Join-Path $userProfileDirectory ".codex\backups\windows-npm-overlay"
+$backupRoot = Resolve-BackupRoot
 $backupDirectory = Join-Path $backupRoot ([DateTime]::UtcNow.ToString("yyyyMMdd-HHmmssfff"))
 [IO.Directory]::CreateDirectory($backupDirectory) | Out-Null
 
@@ -189,7 +198,8 @@ $manifest = [ordered]@{
     overlayApplyPatchSha256 = Get-Sha256 $applyPatchSource
 }
 $manifestPath = Join-Path $backupDirectory "manifest.json"
-$manifest | ConvertTo-Json | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+$manifestJson = $manifest | ConvertTo-Json
+[IO.File]::WriteAllText($manifestPath, $manifestJson, [Text.UTF8Encoding]::new($false))
 
 try {
     Write-Step "Installing codex.exe and native apply_patch.exe"
@@ -221,4 +231,7 @@ Write-Host ""
 Write-Host "Installed Windows overlay successfully: $versionOutput"
 Write-Host "Package directory: $packageDirectory"
 Write-Host "Backup directory:  $backupDirectory"
-Write-Host "Restore command:    pwsh -File `"$(Join-Path $PayloadDirectory 'restore.ps1')`" -BackupDirectory `"$backupDirectory`""
+$powerShellExecutableName = if ($PSVersionTable.PSEdition -eq "Core") { "pwsh.exe" } else { "powershell.exe" }
+$powerShellExecutable = Join-Path $PSHOME $powerShellExecutableName
+$restoreScript = Join-Path $PayloadDirectory "restore.ps1"
+Write-Host "Restore command:    & `"$powerShellExecutable`" -NoProfile -ExecutionPolicy Bypass -File `"$restoreScript`" -BackupDirectory `"$backupDirectory`""
