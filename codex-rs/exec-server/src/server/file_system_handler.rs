@@ -194,6 +194,11 @@ impl FileSystemHandler {
                 bytes,
                 WriteFileOptions {
                     follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                    disposition: if params.create_new.unwrap_or(false) {
+                        crate::WriteDisposition::CreateNew
+                    } else {
+                        crate::WriteDisposition::Overwrite
+                    },
                 },
                 params.sandbox.as_ref(),
             )
@@ -399,6 +404,7 @@ mod tests {
                 .write_file(FsWriteFileParams {
                     path: path.clone(),
                     follow_symlinks: None,
+                    create_new: None,
                     data_base64: STANDARD.encode("ok"),
                     sandbox: Some(sandbox_context(sandbox_policy.clone())),
                 })
