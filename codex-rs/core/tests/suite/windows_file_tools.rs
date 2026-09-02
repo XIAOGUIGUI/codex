@@ -56,7 +56,8 @@ async fn native_windows_file_tools_read_search_and_list_without_powershell() -> 
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    let tools = requests[0].body_json()["tools"]
+    let request_body = requests[0].body_json();
+    let tools = request_body["tools"]
         .as_array()
         .expect("request should advertise tools")
         .iter()
