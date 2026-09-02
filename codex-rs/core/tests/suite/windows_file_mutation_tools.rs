@@ -85,7 +85,8 @@ async fn function_models_can_edit_existing_files_and_create_new_files() -> Resul
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    let tools = requests[0].body_json()["tools"]
+    let request_body = requests[0].body_json();
+    let tools = request_body["tools"]
         .as_array()
         .expect("request should advertise tools")
         .iter()
