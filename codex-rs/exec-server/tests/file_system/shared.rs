@@ -16,6 +16,7 @@ use codex_exec_server::WalkEntry;
 use codex_exec_server::WalkEntryKind;
 use codex_exec_server::WalkOptions;
 use codex_exec_server::WalkOutcome;
+use codex_exec_server::WriteDisposition;
 use codex_exec_server::WriteFileOptions;
 use codex_file_system::MAX_WALK_DEPTH;
 use codex_file_system::MAX_WALK_DIRECTORIES;
@@ -189,7 +190,10 @@ async fn file_system_write_file_writes_bytes(
         .write_file(
             &PathUri::from_host_native_path(&file_path)?,
             b"hello from trait".to_vec(),
-            WriteFileOptions { follow_symlinks },
+            WriteFileOptions {
+                follow_symlinks,
+                ..Default::default()
+            },
             sandbox.as_ref(),
         )
         .await;
@@ -206,12 +210,45 @@ async fn file_system_write_file_writes_bytes(
         .write_file(
             &PathUri::from_host_native_path(&file_path)?,
             b"after".to_vec(),
-            WriteFileOptions { follow_symlinks },
+            WriteFileOptions {
+                follow_symlinks,
+                ..Default::default()
+            },
             sandbox.as_ref(),
         )
         .await
         .with_context(|| format!("mode={implementation}, sandboxed={sandboxed}"))?;
     assert_eq!(std::fs::read(file_path)?, b"after");
+
+    let create_new_options = WriteFileOptions {
+        follow_symlinks,
+        disposition: WriteDisposition::CreateNew,
+    };
+    let existing_path = root.join("create-new-existing.txt");
+    std::fs::write(&existing_path, b"keep")?;
+    assert!(
+        file_system
+            .write_file(
+                &PathUri::from_host_native_path(&existing_path)?,
+                b"replace".to_vec(),
+                create_new_options,
+                sandbox.as_ref(),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read(existing_path)?, b"keep");
+
+    let new_path = root.join("create-new.txt");
+    file_system
+        .write_file(
+            &PathUri::from_host_native_path(&new_path)?,
+            b"new".to_vec(),
+            create_new_options,
+            sandbox.as_ref(),
+        )
+        .await?;
+    assert_eq!(std::fs::read(new_path)?, b"new");
 
     Ok(())
 }

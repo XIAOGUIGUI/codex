@@ -1,3 +1,4 @@
+use crate::WriteDisposition;
 use crate::regular_file;
 use std::ffi::OsStr;
 use std::ffi::c_void;
@@ -223,17 +224,27 @@ pub(super) async fn open_file(path: PathBuf) -> io::Result<tokio::fs::File> {
         .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
 }
 
-pub(super) async fn write_file(path: PathBuf, contents: Vec<u8>) -> io::Result<()> {
+pub(super) async fn write_file(
+    path: PathBuf,
+    contents: Vec<u8>,
+    disposition: WriteDisposition,
+) -> io::Result<()> {
     tokio::task::spawn_blocking(move || {
+        let create_disposition = match disposition {
+            WriteDisposition::Overwrite => FILE_OPEN_IF,
+            WriteDisposition::CreateNew => FILE_CREATE,
+        };
         let handle = open_handle(
             &path,
             FILE_READ_ATTRIBUTES | FILE_WRITE_DATA,
-            FILE_OPEN_IF,
+            create_disposition,
             FILE_NON_DIRECTORY_FILE,
         )?;
         let mut file = std::fs::File::from(handle);
         validate_regular_file(&file, &path)?;
-        file.set_len(0)?;
+        if disposition == WriteDisposition::Overwrite {
+            file.set_len(0)?;
+        }
         file.write_all(&contents)
     })
     .await

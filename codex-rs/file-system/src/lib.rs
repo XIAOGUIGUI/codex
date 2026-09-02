@@ -60,14 +60,25 @@ impl Default for ReadFileOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WriteFileOptions {
     pub follow_symlinks: bool,
+    pub disposition: WriteDisposition,
 }
 
 impl Default for WriteFileOptions {
     fn default() -> Self {
         Self {
             follow_symlinks: true,
+            disposition: WriteDisposition::Overwrite,
         }
     }
+}
+
+/// Controls whether a filesystem write may replace an existing entry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WriteDisposition {
+    #[default]
+    Overwrite,
+    /// Atomically fails when the destination path already exists.
+    CreateNew,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

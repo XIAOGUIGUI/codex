@@ -117,6 +117,7 @@ async fn forwarder_runs_commands_and_transfers_files() -> Result<()> {
         client.fs_write_file(FsWriteFileParams {
             path: PathUri::from_host_native_path(&path)?,
             follow_symlinks: None,
+            create_new: None,
             data_base64: STANDARD.encode(&contents),
             sandbox: None,
         }),
