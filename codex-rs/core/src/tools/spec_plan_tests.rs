@@ -202,6 +202,7 @@ async fn probe_with(
     inputs: ToolPlanInputs,
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
+    turn.dynamic_tools = inputs.dynamic_tools.clone();
     configure_turn(&mut turn);
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
@@ -444,6 +445,29 @@ fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> Dyn
         }
         None => DynamicToolSpec::Function(function),
     }
+}
+
+#[test]
+fn default_dynamic_tool_detection_uses_normalized_tool_names() {
+    for tool in [
+        dynamic_tool(
+            /*namespace*/ None,
+            "edit_file",
+            /*defer_loading*/ false,
+        ),
+        dynamic_tool(Some("functions"), "edit_file", /*defer_loading*/ false),
+        dynamic_tool(Some(""), "edit_file", /*defer_loading*/ false),
+    ] {
+        assert!(super::has_default_dynamic_tool(&[tool], "edit_file"));
+    }
+    assert!(!super::has_default_dynamic_tool(
+        &[dynamic_tool(
+            Some("client"),
+            "edit_file",
+            /*defer_loading*/ false,
+        )],
+        "edit_file",
+    ));
 }
 
 fn plugin_candidates(presentation: ToolSuggestPresentation) -> ToolSuggestCandidates {
@@ -1123,13 +1147,15 @@ async fn environment_count_controls_environment_backed_tools() {
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
         set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         Arc::make_mut(&mut turn.model_info).apply_patch_tool_type =
-            Some(ApplyPatchToolType::Freeform);
+            Some(ApplyPatchToolType::Function);
     })
     .await;
     no_environment.assert_visible_lacks(&[
         "exec_command",
         "write_stdin",
         "apply_patch",
+        "edit_file",
+        "write_file",
         "view_image",
         "request_permissions",
     ]);
@@ -1137,6 +1163,8 @@ async fn environment_count_controls_environment_backed_tools() {
         "exec_command",
         "write_stdin",
         "apply_patch",
+        "edit_file",
+        "write_file",
         "view_image",
         "request_permissions",
     ]);
@@ -1176,6 +1204,62 @@ async fn environment_count_controls_environment_backed_tools() {
         function_tool.visible_spec("apply_patch"),
         ToolSpec::Function(_)
     ));
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn structured_file_mutation_tools_require_function_apply_patch() {
+    let function = probe(|turn| {
+        Arc::make_mut(&mut turn.model_info).apply_patch_tool_type =
+            Some(ApplyPatchToolType::Function);
+    })
+    .await;
+    function.assert_visible_contains(&["apply_patch", "edit_file", "write_file"]);
+
+    let freeform = probe(|turn| {
+        Arc::make_mut(&mut turn.model_info).apply_patch_tool_type =
+            Some(ApplyPatchToolType::Freeform);
+    })
+    .await;
+    freeform.assert_visible_contains(&["apply_patch"]);
+    freeform.assert_visible_lacks(&["edit_file", "write_file"]);
+
+    let disabled = probe(|turn| {
+        Arc::make_mut(&mut turn.model_info).apply_patch_tool_type = None;
+    })
+    .await;
+    disabled.assert_visible_lacks(&["apply_patch", "edit_file", "write_file"]);
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn legacy_dynamic_file_mutation_tools_keep_priority() {
+    let plan = probe_with(
+        |_| {},
+        ToolPlanInputs {
+            dynamic_tools: vec![
+                dynamic_tool(
+                    /*namespace*/ None,
+                    "edit_file",
+                    /*defer_loading*/ false,
+                ),
+                dynamic_tool(
+                    Some("functions"),
+                    "write_file",
+                    /*defer_loading*/ false,
+                ),
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    for name in ["edit_file", "write_file"] {
+        let ToolSpec::Function(spec) = plan.visible_spec(name) else {
+            panic!("{name} should remain a function tool");
+        };
+        assert_eq!(spec.description, format!("{name} dynamic tool"));
+    }
 }
 
 #[tokio::test]
