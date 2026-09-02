@@ -14,6 +14,8 @@ use crate::tools::handlers::CurrentTimeHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
+use crate::tools::handlers::FileToolHandler;
+use crate::tools::handlers::FileToolKind;
 use crate::tools::handlers::GetContextRemainingHandler;
 use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
@@ -1241,6 +1243,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         registry.add(ApplyPatchHandler::new(include_environment_id, tool_type));
+    }
+
+    if cfg!(windows) && environment_mode.has_environment() {
+        registry.add(FileToolHandler::new(FileToolKind::Read));
+        registry.add(FileToolHandler::new(FileToolKind::Grep));
+        registry.add(FileToolHandler::new(FileToolKind::Glob));
     }
 
     if context
