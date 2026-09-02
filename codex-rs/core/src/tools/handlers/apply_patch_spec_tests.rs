@@ -42,7 +42,7 @@ fn create_apply_patch_function_tool_matches_expected_spec() {
         create_apply_patch_function_tool(/*include_environment_id*/ false),
         ToolSpec::Function(ResponsesApiTool {
             name: "apply_patch".to_string(),
-            description: "Apply a context-checked patch to files. This is a standard JSON function tool; pass the patch text in the `patch` field. The Codex host supplies omitted outer Begin/End markers."
+            description: "Apply a context-checked patch to files. When edit_file or write_file is available, prefer those structured tools for single-file changes and use apply_patch for complex or multi-file edits. This is a standard JSON function tool; pass the patch text in the `patch` field. The Codex host supplies omitted outer Begin/End markers."
                 .to_string(),
             strict: false,
             defer_loading: None,
