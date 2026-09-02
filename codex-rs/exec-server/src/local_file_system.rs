@@ -15,6 +15,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::io;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use tokio_util::sync::CancellationToken;
 
@@ -37,6 +38,7 @@ use crate::WalkEntryKind;
 use crate::WalkError;
 use crate::WalkOptions;
 use crate::WalkOutcome;
+use crate::WriteDisposition;
 use crate::WriteFileOptions;
 use crate::no_follow;
 use crate::regular_file;
@@ -626,9 +628,20 @@ impl DirectFileSystem {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
         if options.follow_symlinks {
-            tokio::fs::write(path.as_path(), contents).await
+            match options.disposition {
+                WriteDisposition::Overwrite => tokio::fs::write(path.as_path(), contents).await,
+                WriteDisposition::CreateNew => {
+                    let mut file = tokio::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(path.as_path())
+                        .await?;
+                    file.write_all(&contents).await?;
+                    file.flush().await
+                }
+            }
         } else {
-            no_follow::write_file(path.as_path(), contents).await
+            no_follow::write_file(path.as_path(), contents, options.disposition).await
         }
     }
 
