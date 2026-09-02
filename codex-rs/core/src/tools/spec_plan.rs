@@ -14,6 +14,8 @@ use crate::tools::handlers::CurrentTimeHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
+use crate::tools::handlers::FileMutationToolHandler;
+use crate::tools::handlers::FileMutationToolKind;
 use crate::tools::handlers::FileToolHandler;
 use crate::tools::handlers::FileToolKind;
 use crate::tools::handlers::GetContextRemainingHandler;
@@ -75,6 +77,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -1265,6 +1268,17 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add(FileToolHandler::new(FileToolKind::Read));
         registry.add(FileToolHandler::new(FileToolKind::Grep));
         registry.add(FileToolHandler::new(FileToolKind::Glob));
+        if matches!(
+            turn_context.model_info.apply_patch_tool_type,
+            Some(ApplyPatchToolType::Function)
+        ) {
+            if !has_default_dynamic_tool(&turn_context.dynamic_tools, "edit_file") {
+                registry.add(FileMutationToolHandler::new(FileMutationToolKind::Edit));
+            }
+            if !has_default_dynamic_tool(&turn_context.dynamic_tools, "write_file") {
+                registry.add(FileMutationToolHandler::new(FileMutationToolKind::Write));
+            }
+        }
     }
 
     if context
@@ -1289,6 +1303,20 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
             include_environment_id,
         }));
     }
+}
+
+fn has_default_dynamic_tool(dynamic_tools: &[DynamicToolSpec], name: &str) -> bool {
+    let built_in_name = ToolName::plain(name).with_default_namespace();
+    dynamic_tools.iter().any(|tool| match tool {
+        DynamicToolSpec::Function(function) => {
+            ToolName::plain(&function.name).with_default_namespace() == built_in_name
+        }
+        DynamicToolSpec::Namespace(namespace) => namespace.tools.iter().any(|tool| {
+            let DynamicToolNamespaceTool::Function(function) = tool;
+            ToolName::namespaced(&namespace.name, &function.name).with_default_namespace()
+                == built_in_name
+        }),
+    })
 }
 
 #[instrument(level = "trace", skip_all)]

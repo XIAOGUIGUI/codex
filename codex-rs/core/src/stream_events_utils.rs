@@ -307,6 +307,29 @@ pub(crate) async fn handle_output_item_done(
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
+            if let (Some(limit), crate::tools::context::ToolPayload::Function { arguments }) = (
+                ctx.tool_runtime.model_argument_bytes_limit(&call.tool_name),
+                &call.payload,
+            ) && arguments
+                .len()
+                .saturating_add(
+                    call.encrypted_function_args
+                        .as_ref()
+                        .map_or(0, |encrypted| {
+                            encrypted
+                                .iter()
+                                .map(String::len)
+                                .fold(0usize, usize::saturating_add)
+                        }),
+                )
+                > limit
+            {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "{} plaintext and encrypted arguments exceed the combined {limit}-byte limit; use apply_patch for larger changes",
+                    call.tool_name
+                )));
+            }
+
             ctx.sess
                 .input_queue
                 .accept_mailbox_delivery_for_current_turn(
