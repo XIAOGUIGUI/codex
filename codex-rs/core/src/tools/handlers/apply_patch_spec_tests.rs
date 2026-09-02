@@ -35,3 +35,46 @@ fn create_apply_patch_freeform_tool_includes_environment_id_when_requested() {
             .contains("\"*** Environment ID: \" filename LF")
     );
 }
+
+#[test]
+fn create_apply_patch_function_tool_matches_expected_spec() {
+    assert_eq!(
+        create_apply_patch_function_tool(/*include_environment_id*/ false),
+        ToolSpec::Function(ResponsesApiTool {
+            name: "apply_patch".to_string(),
+            description: "Apply a context-checked patch to files. This is a standard JSON function tool; pass the patch text in the `patch` field. The Codex host supplies omitted outer Begin/End markers."
+                .to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
+                    "patch".to_string(),
+                    JsonSchema::string(Some(
+                        "Patch text to apply. You may provide a complete patch from `*** Begin Patch` through `*** End Patch`, or omit both outer markers and start directly with `*** Add File:`, `*** Update File:`, or `*** Delete File:`. Update hunks must start with `@@`, and every hunk body line must start with a space (context), `+` (added), or `-` (removed). Do not wrap the patch in Markdown or a command array."
+                            .to_string(),
+                    )),
+                )]),
+                Some(vec!["patch".to_string()]),
+                Some(false.into()),
+            ),
+            output_schema: None,
+        })
+    );
+}
+
+#[test]
+fn create_apply_patch_function_tool_includes_environment_id_when_requested() {
+    let ToolSpec::Function(tool) =
+        create_apply_patch_function_tool(/*include_environment_id*/ true)
+    else {
+        panic!("expected function tool");
+    };
+
+    assert_eq!(
+        serde_json::to_value(tool.parameters)
+            .expect("schema should serialize")
+            .pointer("/properties/environment_id")
+            .is_some(),
+        true
+    );
+}

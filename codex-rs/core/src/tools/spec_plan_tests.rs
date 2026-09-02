@@ -473,6 +473,12 @@ fn apply_patch_accepts_environment_id(spec: &ToolSpec) -> bool {
         ToolSpec::Freeform(tool) if tool.name == "apply_patch" => {
             tool.format.definition.contains("Environment ID")
         }
+        ToolSpec::Function(tool) if tool.name == "apply_patch" => {
+            serde_json::to_value(&tool.parameters)
+                .expect("tool parameters should serialize")
+                .pointer("/properties/environment_id")
+                .is_some()
+        }
         _ => false,
     }
 }
@@ -1159,6 +1165,16 @@ async fn environment_count_controls_environment_backed_tools() {
     assert!(has_parameter(
         multiple_environments.visible_spec("view_image"),
         "environment_id"
+    ));
+
+    let function_tool = probe(|turn| {
+        Arc::make_mut(&mut turn.model_info).apply_patch_tool_type =
+            Some(ApplyPatchToolType::Function);
+    })
+    .await;
+    assert!(matches!(
+        function_tool.visible_spec("apply_patch"),
+        ToolSpec::Function(_)
     ));
 }
 
