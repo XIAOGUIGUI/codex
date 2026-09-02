@@ -42,6 +42,7 @@ use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::ApplyPatchFileUpdateMode;
 use codex_apply_patch::Hunk;
 use codex_apply_patch::StreamingPatchParser;
+use codex_apply_patch::StructuredFileMutation;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -697,6 +698,44 @@ async fn execute_verified_patch(
     tracker: Option<&SharedTurnDiffTracker>,
     tool_ctx: ToolCtx,
 ) -> Result<String, FunctionCallError> {
+    execute_verified_patch_with_runtime(
+        action,
+        cwd,
+        turn_environment,
+        tracker,
+        tool_ctx,
+        ApplyPatchRuntime::new(),
+    )
+    .await
+}
+
+pub(crate) async fn execute_structured_file_mutation(
+    mutation: StructuredFileMutation,
+    cwd: &PathUri,
+    turn_environment: TurnEnvironment,
+    tracker: Option<&SharedTurnDiffTracker>,
+    tool_ctx: ToolCtx,
+) -> Result<String, FunctionCallError> {
+    let action = mutation.action(cwd);
+    execute_verified_patch_with_runtime(
+        action,
+        cwd,
+        turn_environment,
+        tracker,
+        tool_ctx,
+        ApplyPatchRuntime::new_structured(mutation),
+    )
+    .await
+}
+
+async fn execute_verified_patch_with_runtime(
+    action: ApplyPatchAction,
+    cwd: &PathUri,
+    turn_environment: TurnEnvironment,
+    tracker: Option<&SharedTurnDiffTracker>,
+    tool_ctx: ToolCtx,
+    mut runtime: ApplyPatchRuntime,
+) -> Result<String, FunctionCallError> {
     let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
         effective_patch_permissions(tool_ctx.session.as_ref(), &turn_environment, &action, cwd)
             .await
@@ -731,7 +770,6 @@ async fn execute_verified_patch(
         permissions_preapproved: effective_additional_permissions.permissions_preapproved,
     };
     let mut orchestrator = ToolOrchestrator::new();
-    let mut runtime = ApplyPatchRuntime::new();
     let result = orchestrator
         .run(&mut runtime, &request, &tool_ctx)
         .await

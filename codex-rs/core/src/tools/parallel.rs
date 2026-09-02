@@ -70,6 +70,15 @@ impl ToolCallRuntime {
             .create_diff_consumer(tool_name)
     }
 
+    pub(crate) fn model_argument_bytes_limit(
+        &self,
+        tool_name: &codex_tools::ToolName,
+    ) -> Option<usize> {
+        self.step_context
+            .tool_router
+            .model_argument_bytes_limit(tool_name)
+    }
+
     #[instrument(level = "trace", skip_all)]
     pub(crate) fn handle_tool_call(
         self,
