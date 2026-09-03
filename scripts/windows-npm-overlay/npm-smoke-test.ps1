@@ -184,3 +184,5 @@ try {
         Remove-Item -LiteralPath $testDirectory -Recurse -Force
     }
 }
+
+exit 0
