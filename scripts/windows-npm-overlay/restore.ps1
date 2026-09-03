@@ -10,7 +10,18 @@ $ProgressPreference = "SilentlyContinue"
 function Get-Sha256 {
     param([string]$Path)
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        try {
+            $hash = $sha256.ComputeHash($stream)
+            return [BitConverter]::ToString($hash).Replace("-", "").ToLowerInvariant()
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
 }
 
 function Copy-FileReplacing {
