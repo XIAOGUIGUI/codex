@@ -6,7 +6,7 @@ on:
       patch_revision:
         description: Patch package revision appended to the Codex version
         required: true
-        default: "1"
+        default: "2"
         type: string
       publish_npm:
         description: Publish the generated package to npm
@@ -81,6 +81,14 @@ jobs:
           just test -p codex-core inject_apply_patch_env_follows_preserve_line_endings_feature
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           just test -p codex-core file_update_mode_follows_preserve_line_endings_feature
+          exit $LASTEXITCODE
+
+      - name: Test compatibility diagnostics
+        shell: pwsh
+        run: |
+          just test -p codex-diagnostics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-cli compatibility_diagnostics_cmd
           exit $LASTEXITCODE
 
       - name: Build release executables

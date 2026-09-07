@@ -1118,7 +1118,7 @@ impl Session {
                 user_email: account_email,
                 terminal_type: Some(terminal_type),
                 model: Some(session_model.clone()),
-                slug: Some(session_model),
+                slug: Some(session_model.clone()),
             };
             config.features.emit_metrics(&session_telemetry);
             session_telemetry.counter(
@@ -1395,6 +1395,23 @@ impl Session {
                 .features
                 .enabled(Feature::ExecutedToolCallMetadata)
                 .then(|| Arc::new(crate::state::ExecutedToolCallRecorder::default()));
+            let compatibility_diagnostics = codex_diagnostics::CompatibilityDiagnostics::start(
+                &config.compatibility_diagnostics,
+                codex_diagnostics::CompatibilityDiagnosticsContext {
+                    app_version: env!("CARGO_PKG_VERSION").to_string(),
+                    build_commit: option_env!("CODEX_BUILD_COMMIT")
+                        .or(option_env!("GIT_COMMIT"))
+                        .or(option_env!("STABLE_GIT_COMMIT"))
+                        .map(str::to_string),
+                    provider: session_configuration.provider.info().name.clone(),
+                    model: session_model.clone(),
+                    session_id: thread_id.to_string(),
+                },
+            )
+            .unwrap_or_else(|error| {
+                tracing::warn!("compatibility diagnostics disabled: {error}");
+                codex_diagnostics::CompatibilityDiagnostics::default()
+            });
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
                 // published after SessionConfigured so MCP events follow it.
@@ -1419,6 +1436,7 @@ impl Session {
                 )
                 .with_legacy_custom_ca_fallback(),
                 session_telemetry,
+                compatibility_diagnostics,
                 models_manager: Arc::clone(&models_manager),
                 git_root_discovery,
                 tool_approvals: Mutex::new(ApprovalStore::default()),
