@@ -507,6 +507,37 @@
       },
       "type": "object"
     },
+    "CompatibilityDiagnosticsConfig": {
+      "additionalProperties": false,
+      "description": "User configuration for privacy-safe local compatibility diagnostics.",
+      "properties": {
+        "directory": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "default": null
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "max_total_mib": {
+          "default": null,
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "retention_days": {
+          "default": null,
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ComputerUseConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -5861,6 +5892,20 @@
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
+    },
+    "compatibility_diagnostics": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CompatibilityDiagnosticsConfig"
+        }
+      ],
+      "default": {
+        "directory": null,
+        "enabled": false,
+        "max_total_mib": null,
+        "retention_days": null
+      },
+      "description": "Privacy-safe local logging for Windows and custom-provider compatibility failures."
     },
     "computer_use": {
       "$ref": "#/definitions/ComputerUseConfigToml"

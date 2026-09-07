@@ -906,6 +906,9 @@ pub struct Config {
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
 
+    /// Privacy-safe local compatibility diagnostics. Disabled by default.
+    pub compatibility_diagnostics: codex_diagnostics::CompatibilityDiagnosticsConfig,
+
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
@@ -4236,6 +4239,7 @@ impl Config {
             codex_home,
             sqlite: codex_state::SqliteConfig::from_sqlite_home(sqlite_home),
             log_dir,
+            compatibility_diagnostics: cfg.compatibility_diagnostics,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),

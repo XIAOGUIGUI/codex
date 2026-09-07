@@ -15,6 +15,7 @@ workspace = true
 anyhow = { workspace = true }
 base64 = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-diagnostics = { workspace = true }
 codex-features = { workspace = true }
 codex-file-system = { workspace = true }
 codex-git-utils = { workspace = true }
