@@ -331,6 +331,7 @@ async fn file_mutation_history_limit_accepts_boundary_and_rejects_overflow_befor
     registry.add(FileMutationToolHandler::new(FileMutationToolKind::Write));
     let router = Arc::new(ToolRouter::from_registry(
         step_context.turn.as_ref(),
+        step_context.turn.model_info(),
         registry,
         Vec::new(),
         &Default::default(),
