@@ -51,16 +51,16 @@ async fn file_update_mode_follows_preserve_line_endings_feature() {
     let (_, mut turn) = make_session_and_context().await;
     assert_eq!(
         apply_patch_file_update_mode(&turn),
-        codex_apply_patch::ApplyPatchFileUpdateMode::NormalizeToLf
+        codex_apply_patch::ApplyPatchFileUpdateMode::PreserveLineEndings
     );
 
     Arc::make_mut(&mut turn.config)
         .features
-        .enable(codex_features::Feature::ApplyPatchPreserveLineEndings)
-        .expect("feature should be enabled");
+        .disable(codex_features::Feature::ApplyPatchPreserveLineEndings)
+        .expect("feature should be disabled");
     assert_eq!(
         apply_patch_file_update_mode(&turn),
-        codex_apply_patch::ApplyPatchFileUpdateMode::PreserveLineEndings
+        codex_apply_patch::ApplyPatchFileUpdateMode::NormalizeToLf
     );
 }
 

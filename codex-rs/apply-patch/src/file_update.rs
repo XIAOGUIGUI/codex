@@ -3,6 +3,7 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadFileOptions;
 use codex_utils_path_uri::PathUri;
 use similar::TextDiff;
+use std::io;
 
 use crate::ApplyPatchError;
 use crate::ApplyPatchFileUpdateMode;
@@ -31,8 +32,8 @@ pub(crate) async fn derive_new_contents_from_chunks(
     follow_symlinks: bool,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs
-        .read_file_text(path, ReadFileOptions { follow_symlinks }, sandbox)
+    let original_bytes = fs
+        .read_file(path, ReadFileOptions { follow_symlinks }, sandbox)
         .await
         .map_err(|err| {
             ApplyPatchError::IoError(IoError {
@@ -43,11 +44,37 @@ pub(crate) async fn derive_new_contents_from_chunks(
                 source: err,
             })
         })?;
+    let encoding = if original_bytes.starts_with(&[0xff, 0xfe]) {
+        "UTF-16 little-endian"
+    } else if original_bytes.starts_with(&[0xfe, 0xff]) {
+        "UTF-16 big-endian"
+    } else {
+        "a non-UTF-8 encoding"
+    };
+    let original_contents = String::from_utf8(original_bytes).map_err(|err| {
+        ApplyPatchError::IoError(IoError {
+            context: format!(
+                "Failed to read file to update {}",
+                path.inferred_native_path_string()
+            ),
+            source: io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "detected {encoding}; apply_patch supports UTF-8 with or without a BOM only: {err}"
+                ),
+            ),
+        })
+    })?;
+    let (contents_to_update, has_utf8_bom) = original_contents
+        .strip_prefix('\u{feff}')
+        .map_or((original_contents.as_str(), false), |contents| {
+            (contents, true)
+        });
 
     let path_text = path.inferred_native_path_string();
-    let new_contents = match update_file_mode {
+    let updated_contents = match update_file_mode {
         ApplyPatchFileUpdateMode::NormalizeToLf => {
-            let mut original_lines = original_contents
+            let mut original_lines = contents_to_update
                 .split('\n')
                 .map(String::from)
                 .collect::<Vec<_>>();
@@ -67,13 +94,18 @@ pub(crate) async fn derive_new_contents_from_chunks(
             new_lines.join("\n")
         }
         ApplyPatchFileUpdateMode::PreserveLineEndings => {
-            let mut source_file = SourceFile::parse(&original_contents);
+            let mut source_file = SourceFile::parse(contents_to_update);
             let original_lines = source_file.line_texts();
             let replacements =
                 compute_replacements(&original_lines, &path_text, chunks, update_file_mode)?;
             source_file.apply_replacements(&replacements);
             source_file.into_contents()
         }
+    };
+    let new_contents = if has_utf8_bom {
+        format!("\u{feff}{updated_contents}")
+    } else {
+        updated_contents
     };
     Ok(AppliedPatch {
         original_contents,

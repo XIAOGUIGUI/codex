@@ -1,9 +1,9 @@
 /// Attempt to find the sequence of `pattern` lines within `lines` beginning at or after `start`.
 /// Returns the starting index of the match or `None` if not found. Matches are attempted with
-/// decreasing strictness: exact match, then ignoring trailing whitespace, then ignoring leading
-/// and trailing whitespace. When `eof` is true, we first try starting at the end-of-file (so that
-/// patterns intended to match file endings are applied at the end), and fall back to searching
-/// from `start` if needed.
+/// decreasing strictness: exact match, then ignoring trailing whitespace, then normalising common
+/// Unicode punctuation while still preserving leading whitespace. When `eof` is true, we first
+/// try starting at the end-of-file (so that patterns intended to match file endings are applied at
+/// the end), and fall back to searching from `start` if needed.
 ///
 /// Special cases handled defensively:
 ///  • Empty `pattern` → returns `Some(start)` (no-op match)
@@ -55,20 +55,6 @@ pub(crate) fn seek_sequence(
             return Some(i);
         }
     }
-    // Finally, trim both sides to allow more lenience.
-    for i in search_start..=lines.len().saturating_sub(pattern.len()) {
-        let mut ok = true;
-        for (p_idx, pat) in pattern.iter().enumerate() {
-            if lines[i + p_idx].trim() != pat.trim() {
-                ok = false;
-                break;
-            }
-        }
-        if ok {
-            return Some(i);
-        }
-    }
-
     // ------------------------------------------------------------------
     // Final, most permissive pass – attempt to match after *normalising*
     // common Unicode punctuation to their ASCII equivalents so that diffs
@@ -79,7 +65,7 @@ pub(crate) fn seek_sequence(
     // ------------------------------------------------------------------
 
     fn normalise(s: &str) -> String {
-        s.trim()
+        s.trim_end()
             .chars()
             .map(|c| match c {
                 // Various dash / hyphen code-points → ASCII '-'
@@ -158,9 +144,8 @@ mod tests {
     }
 
     #[test]
-    fn test_trim_match_ignores_leading_and_trailing_whitespace() {
+    fn test_leading_whitespace_mismatch_is_rejected() {
         let lines = to_vec(&["    foo   ", "   bar\t"]);
-        // Pattern omits any additional whitespace.
         let pattern = to_vec(&["foo", "bar"]);
         assert_eq!(
             seek_sequence(
@@ -170,7 +155,35 @@ mod tests {
                 /*eof*/ false,
                 ApplyPatchFileUpdateMode::NormalizeToLf,
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_unicode_match_preserves_leading_whitespace() {
+        let lines = to_vec(&["    ‘quoted’ — value   "]);
+        let matching_pattern = to_vec(&["    'quoted' - value"]);
+        let mismatched_pattern = to_vec(&["   'quoted' - value"]);
+
+        assert_eq!(
+            seek_sequence(
+                &lines,
+                &matching_pattern,
+                /*start*/ 0,
+                /*eof*/ false,
+                ApplyPatchFileUpdateMode::NormalizeToLf,
+            ),
             Some(0)
+        );
+        assert_eq!(
+            seek_sequence(
+                &lines,
+                &mismatched_pattern,
+                /*start*/ 0,
+                /*eof*/ false,
+                ApplyPatchFileUpdateMode::NormalizeToLf,
+            ),
+            None
         );
     }
 
