@@ -2,11 +2,16 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
+use codex_diagnostics::CompatibilityDiagnostics;
+use codex_diagnostics::CompatibilityDiagnosticsConfig;
+use codex_diagnostics::CompatibilityDiagnosticsContext;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
 use codex_rollout_trace::ToolCallRequester;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -241,6 +246,58 @@ async fn dispatch_lifecycle_trace_records_unsupported_tool_failures() -> anyhow:
 }
 
 #[tokio::test]
+async fn dispatch_failure_records_privacy_safe_compatibility_diagnostics() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let diagnostics_root = temp.path().join("compatibility");
+    let (mut session, turn) = make_session_and_context().await;
+    session.services.compatibility_diagnostics = CompatibilityDiagnostics::start(
+        &CompatibilityDiagnosticsConfig {
+            enabled: true,
+            directory: Some(AbsolutePathBuf::try_from(diagnostics_root.clone())?),
+            retention_days: Some(30),
+            max_total_mib: Some(1),
+        },
+        CompatibilityDiagnosticsContext {
+            app_version: "0.153.4".to_string(),
+            build_commit: Some("test".to_string()),
+            provider: "third-party".to_string(),
+            model: "test-model".to_string(),
+            session_id: "secret-session-id".to_string(),
+        },
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    let registry = ToolRegistry::empty_for_test();
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let result = registry
+        .dispatch_any_with_terminal_outcome(
+            test_invocation(
+                Arc::clone(&session),
+                turn,
+                "unsupported-call",
+                "company_private_tool",
+                ToolCallSource::Direct,
+                "{}",
+            ),
+            /*terminal_outcome_reached*/ None,
+        )
+        .await;
+    assert!(matches!(result, Err(FunctionCallError::RespondToModel(_))));
+    drop(session);
+
+    let contents = wait_for_diagnostics(&diagnostics_root)?;
+    assert!(contents.contains("unknown.failure"));
+    assert!(contents.contains("\"representation\":\"function\""));
+    assert!(contents.contains("\"input_bytes\":2"));
+    assert!(contents.contains("external:"));
+    assert!(!contents.contains("company_private_tool"));
+    assert!(!contents.contains("secret-session-id"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn dispatch_lifecycle_trace_records_incompatible_payload_failures() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let (mut session, turn) = make_session_and_context().await;
@@ -397,4 +454,21 @@ fn single_bundle_dir(root: &Path) -> anyhow::Result<PathBuf> {
     entries.sort();
     assert_eq!(entries.len(), 1);
     Ok(entries.remove(0))
+}
+
+fn wait_for_diagnostics(root: &Path) -> anyhow::Result<String> {
+    for _ in 0..100 {
+        if let Some(path) = fs::read_dir(root)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
+        {
+            let contents = fs::read_to_string(path)?;
+            if !contents.is_empty() {
+                return Ok(contents);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    anyhow::bail!("timed out waiting for compatibility diagnostics")
 }

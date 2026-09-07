@@ -9,16 +9,31 @@ use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use codex_diagnostics::CompatibilityDiagnostics;
+use codex_diagnostics::CompatibilityEventInput;
+use codex_diagnostics::CompatibilityOutcome;
+use codex_diagnostics::ToolRepresentation;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::ToolDispatchInvocation;
 use codex_rollout_trace::ToolDispatchPayload;
 use codex_rollout_trace::ToolDispatchRequester;
 use codex_rollout_trace::ToolDispatchResult;
 use codex_rollout_trace::ToolDispatchTraceContext;
+use std::time::Instant;
 
 /// Keeps registry early-return paths paired with trace end events.
 pub(crate) struct ToolDispatchTrace {
     context: ToolDispatchTraceContext,
+    compatibility: Option<CompatibilityToolTrace>,
+}
+
+struct CompatibilityToolTrace {
+    diagnostics: CompatibilityDiagnostics,
+    started: Instant,
+    tool_name: String,
+    tool_namespace: Option<String>,
+    representation: ToolRepresentation,
+    input_bytes: usize,
 }
 
 impl ToolDispatchTrace {
@@ -28,7 +43,23 @@ impl ToolDispatchTrace {
             .services
             .rollout_thread_trace
             .start_tool_dispatch_trace(|| tool_dispatch_invocation(invocation));
-        Self { context }
+        let diagnostics = invocation
+            .session
+            .services
+            .compatibility_diagnostics
+            .clone();
+        let compatibility = diagnostics.is_enabled().then(|| CompatibilityToolTrace {
+            diagnostics,
+            started: Instant::now(),
+            tool_name: invocation.tool_name.name.clone(),
+            tool_namespace: invocation.tool_name.namespace.clone(),
+            representation: tool_representation(&invocation.source, &invocation.payload),
+            input_bytes: tool_payload_bytes(&invocation.payload),
+        });
+        Self {
+            context,
+            compatibility,
+        }
     }
 
     pub(crate) fn record_completed(
@@ -38,15 +69,38 @@ impl ToolDispatchTrace {
         payload: &ToolPayload,
         result: &dyn ToolOutput,
     ) {
-        if !self.context.is_enabled() {
+        if self.compatibility.is_none() && !self.context.is_enabled() {
             return;
         }
+        let success = result.success_for_logging();
+        if let Some(compatibility) = &self.compatibility {
+            let output = result.log_output();
+            compatibility.diagnostics.record(CompatibilityEventInput {
+                phase: "tool.dispatch",
+                outcome: if success {
+                    CompatibilityOutcome::Success
+                } else {
+                    CompatibilityOutcome::Failure
+                },
+                tool_name: Some(&compatibility.tool_name),
+                tool_namespace: compatibility.tool_namespace.as_deref(),
+                representation: compatibility.representation,
+                duration: compatibility.started.elapsed(),
+                input_bytes: compatibility.input_bytes,
+                output_bytes: output.len(),
+                error: (!success).then_some(output.as_str()),
+            });
+        }
 
-        let Some(result_payload) = tool_dispatch_result(invocation, call_id, payload, result)
+        let Some(result_payload) = self
+            .context
+            .is_enabled()
+            .then(|| tool_dispatch_result(invocation, call_id, payload, result))
+            .flatten()
         else {
             return;
         };
-        let status = if result.success_for_logging() {
+        let status = if success {
             ExecutionStatus::Completed
         } else {
             ExecutionStatus::Failed
@@ -55,7 +109,43 @@ impl ToolDispatchTrace {
     }
 
     pub(crate) fn record_failed(&self, error: &FunctionCallError) {
+        if let Some(compatibility) = &self.compatibility {
+            let error_message = error.to_string();
+            compatibility.diagnostics.record(CompatibilityEventInput {
+                phase: "tool.dispatch",
+                outcome: CompatibilityOutcome::Failure,
+                tool_name: Some(&compatibility.tool_name),
+                tool_namespace: compatibility.tool_namespace.as_deref(),
+                representation: compatibility.representation,
+                duration: compatibility.started.elapsed(),
+                input_bytes: compatibility.input_bytes,
+                output_bytes: error_message.len(),
+                error: Some(&error_message),
+            });
+        }
         self.context.record_failed(error);
+    }
+}
+
+fn tool_representation(source: &ToolCallSource, payload: &ToolPayload) -> ToolRepresentation {
+    if matches!(source, ToolCallSource::CodeMode { .. }) {
+        return ToolRepresentation::CodeMode;
+    }
+    match payload {
+        ToolPayload::Function { .. } => ToolRepresentation::Function,
+        ToolPayload::ToolSearch { .. } => ToolRepresentation::ToolSearch,
+        ToolPayload::Custom { .. } => ToolRepresentation::Custom,
+    }
+}
+
+fn tool_payload_bytes(payload: &ToolPayload) -> usize {
+    match payload {
+        ToolPayload::Function { arguments } | ToolPayload::Custom { input: arguments } => {
+            arguments.len()
+        }
+        ToolPayload::ToolSearch { arguments } => serde_json::to_vec(arguments)
+            .map(|encoded| encoded.len())
+            .unwrap_or(usize::MAX),
     }
 }
 

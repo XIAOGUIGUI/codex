@@ -6632,6 +6632,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         )
         .with_legacy_custom_ca_fallback(),
         session_telemetry: session_telemetry.clone(),
+        compatibility_diagnostics: Default::default(),
         models_manager: Arc::clone(&models_manager),
         git_root_discovery: Arc::default(),
         tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -8805,6 +8806,7 @@ where
         )
         .with_legacy_custom_ca_fallback(),
         session_telemetry: session_telemetry.clone(),
+        compatibility_diagnostics: Default::default(),
         models_manager: Arc::clone(&models_manager),
         git_root_discovery: Arc::default(),
         tool_approvals: Mutex::new(ApprovalStore::default()),

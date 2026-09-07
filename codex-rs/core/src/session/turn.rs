@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -70,6 +71,9 @@ use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
+use codex_diagnostics::CompatibilityEventInput;
+use codex_diagnostics::CompatibilityOutcome;
+use codex_diagnostics::ToolRepresentation;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
@@ -1592,7 +1596,8 @@ async fn run_sampling_request(
                 responses_metadata,
             )?;
         }
-        let err = match try_run_sampling_request(
+        let attempt_started = Instant::now();
+        let attempt_result = try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&step_context),
@@ -1603,8 +1608,42 @@ async fn run_sampling_request(
             &prompt,
             cancellation_token.child_token(),
         )
-        .await
-        {
+        .await;
+        if sess.services.compatibility_diagnostics.is_enabled() {
+            match &attempt_result {
+                Ok(_) => sess
+                    .services
+                    .compatibility_diagnostics
+                    .record(CompatibilityEventInput {
+                        phase: "provider.inference",
+                        outcome: CompatibilityOutcome::Success,
+                        tool_name: None,
+                        tool_namespace: None,
+                        representation: ToolRepresentation::None,
+                        duration: attempt_started.elapsed(),
+                        input_bytes: 0,
+                        output_bytes: 0,
+                        error: None,
+                    }),
+                Err(error) => {
+                    let error = error.to_string();
+                    sess.services
+                        .compatibility_diagnostics
+                        .record(CompatibilityEventInput {
+                            phase: "provider.inference",
+                            outcome: CompatibilityOutcome::Failure,
+                            tool_name: None,
+                            tool_namespace: None,
+                            representation: ToolRepresentation::None,
+                            duration: attempt_started.elapsed(),
+                            input_bytes: 0,
+                            output_bytes: error.len(),
+                            error: Some(&error),
+                        });
+                }
+            }
+        }
+        let err = match attempt_result {
             Ok(output) => {
                 return Ok((output, original_input.unwrap_or(prompt.input)));
             }

@@ -24,7 +24,7 @@ vendor\x86_64-pc-windows-msvc\codex-path\apply_patch.exe
 Install the matching official package and patch version globally:
 
 ```powershell
-npm install -g @openai/codex@0.153.4 @chenronggui/codex-win-patch@0.153.4-patch.1
+npm install -g @openai/codex@0.153.4 @chenronggui/codex-win-patch@0.153.4-patch.2
 ```
 
 The npm `postinstall` hook applies the patch automatically. It prefers
@@ -48,7 +48,7 @@ workflow, extract it, and install the `.tgz` file:
 
 ```powershell
 npm install -g @openai/codex@0.153.4
-npm install -g C:\Downloads\chenronggui-codex-win-patch-0.153.4-patch.1.tgz
+npm install -g C:\Downloads\chenronggui-codex-win-patch-0.153.4-patch.2.tgz
 ```
 
 ## Install from the ZIP overlay
@@ -110,7 +110,7 @@ For the first npm release, publish the downloaded `.tgz` once from an
 authenticated workstation:
 
 ```powershell
-npm publish .\chenronggui-codex-win-patch-0.153.4-patch.1.tgz --access public
+npm publish .\chenronggui-codex-win-patch-0.153.4-patch.2.tgz --access public
 ```
 
 After the package exists, configure npm Trusted Publishing for repository
@@ -126,3 +126,29 @@ then use the workflow's publish option without a long-lived npm token.
 - Patches that make no byte-level change fail instead of reporting success.
 - The native `apply_patch.exe` accepts UTF-8 patches on stdin, avoiding the
   Windows command-line length limit.
+
+## Privacy-safe compatibility diagnostics
+
+This patch can record bounded structured evidence for Windows and custom model
+provider failures without storing prompts, source files, patches, commands, or
+raw tool arguments. Diagnostics are disabled by default and never upload data.
+
+Choose a directory outside `CODEX_HOME` and enable them in `config.toml`:
+
+```toml
+[compatibility_diagnostics]
+enabled = true
+directory = 'D:\CodexDiagnostics'
+retention_days = 30
+max_total_mib = 256
+```
+
+Inspect usage or create a bounded ZIP suitable for external analysis:
+
+```powershell
+codex debug compatibility-diagnostics status --json
+codex debug compatibility-diagnostics report --since 7d --output D:\CodexReports\codex-compatibility-report.zip
+```
+
+The report contains aggregate counts, stable error fingerprints, bounded
+content-free samples, candidate upstream issue links, and a printed SHA-256.
