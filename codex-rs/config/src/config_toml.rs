@@ -352,6 +352,10 @@ pub struct ConfigToml {
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
 
+    /// Privacy-safe local logging for Windows and custom-provider compatibility failures.
+    #[serde(default)]
+    pub compatibility_diagnostics: codex_diagnostics::CompatibilityDiagnosticsConfig,
+
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: Option<UriBasedFileOpener>,
@@ -997,6 +1001,35 @@ mod tests {
                     .expect_err("idle timeout must be a nonnegative integer");
             assert!(error.to_string().contains("thread_unload_delay_secs"));
         }
+    }
+
+    #[test]
+    fn compatibility_diagnostics_accepts_an_external_absolute_directory() {
+        let directory = std::env::temp_dir().join("codex-compatibility-diagnostics");
+        let config: ConfigToml = toml::from_str(&format!(
+            r#"
+[compatibility_diagnostics]
+enabled = true
+directory = '{}'
+retention_days = 30
+max_total_mib = 256
+"#,
+            directory.display()
+        ))
+        .expect("compatibility diagnostics config should deserialize");
+
+        assert_eq!(
+            config.compatibility_diagnostics,
+            codex_diagnostics::CompatibilityDiagnosticsConfig {
+                enabled: true,
+                directory: Some(
+                    codex_utils_absolute_path::AbsolutePathBuf::try_from(directory)
+                        .expect("temporary directory should be absolute"),
+                ),
+                retention_days: Some(30),
+                max_total_mib: Some(256),
+            }
+        );
     }
 
     #[test]
