@@ -24,7 +24,7 @@ vendor\x86_64-pc-windows-msvc\codex-path\apply_patch.exe
 Install the matching official package and patch version globally:
 
 ```powershell
-npm install -g @openai/codex@0.150.1 @chenronggui/codex-win-patch@0.150.1-patch.1
+npm install -g @openai/codex@0.153.4 @chenronggui/codex-win-patch@0.153.4-patch.1
 ```
 
 The npm `postinstall` hook applies the patch automatically. It prefers
@@ -47,8 +47,8 @@ Download the npm package artifact from the `Windows custom Codex overlay`
 workflow, extract it, and install the `.tgz` file:
 
 ```powershell
-npm install -g @openai/codex@0.150.1
-npm install -g C:\Downloads\chenronggui-codex-win-patch-0.150.1-patch.1.tgz
+npm install -g @openai/codex@0.153.4
+npm install -g C:\Downloads\chenronggui-codex-win-patch-0.153.4-patch.1.tgz
 ```
 
 ## Install from the ZIP overlay
@@ -56,7 +56,7 @@ npm install -g C:\Downloads\chenronggui-codex-win-patch-0.150.1-patch.1.tgz
 1. Install the matching official package first:
 
    ```powershell
-   npm install -g @openai/codex@0.150.1
+   npm install -g @openai/codex@0.153.4
    ```
 
 2. Close all running Codex processes.
@@ -110,7 +110,7 @@ For the first npm release, publish the downloaded `.tgz` once from an
 authenticated workstation:
 
 ```powershell
-npm publish .\chenronggui-codex-win-patch-0.150.1-patch.1.tgz --access public
+npm publish .\chenronggui-codex-win-patch-0.153.4-patch.1.tgz --access public
 ```
 
 After the package exists, configure npm Trusted Publishing for repository

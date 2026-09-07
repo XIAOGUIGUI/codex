@@ -1269,7 +1269,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add(FileToolHandler::new(FileToolKind::Grep));
         registry.add(FileToolHandler::new(FileToolKind::Glob));
         if matches!(
-            turn_context.model_info.apply_patch_tool_type,
+            context.model_info.apply_patch_tool_type,
             Some(ApplyPatchToolType::Function)
         ) {
             if !has_default_dynamic_tool(&turn_context.dynamic_tools, "edit_file") {
