@@ -4189,6 +4189,13 @@
     },
     "ThreadCompactStartParams": {
       "properties": {
+        "guidance": {
+          "description": "Optional instructions describing which context the compactor should prioritize.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "threadId": {
           "type": "string"
         }

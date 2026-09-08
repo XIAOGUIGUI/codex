@@ -267,6 +267,97 @@ fn assert_compact_request_omits_harness_metadata(request: &responses::ResponsesR
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn amazon_bedrock_manual_compaction_uses_v2_responses_endpoint() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_auto_env_builder(amazon_bedrock_test_codex()).await?;
+
+    let response_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("message-1", "before compaction"),
+                responses::ev_completed("response-1"),
+            ]),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "BEDROCK_REMOTE_COMPACTED_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("response-compact"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("message-2", "after compaction"),
+                responses::ev_completed("response-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    harness.test().submit_turn("before compact").await?;
+    let guidance = "preserve the Windows overlay verification evidence";
+    harness
+        .test()
+        .codex
+        .submit(Op::CompactWithGuidance {
+            guidance: guidance.to_string(),
+        })
+        .await?;
+    wait_for_turn_complete(&harness.test().codex).await;
+    harness.test().submit_turn("after compact").await?;
+
+    let response_requests = response_mock.requests();
+    assert_eq!(response_requests.len(), 3);
+    assert!(
+        response_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses")
+    );
+    let compact_request = &response_requests[1];
+    assert_eq!(
+        compact_request.header("authorization").as_deref(),
+        Some("Bearer bedrock-test-api-key")
+    );
+    assert_eq!(
+        compact_request
+            .header("x-amzn-mantle-client-agent")
+            .as_deref(),
+        Some("codex")
+    );
+    assert_eq!(
+        compact_request.body_json()["model"],
+        AMAZON_BEDROCK_GPT_5_5_MODEL_ID
+    );
+    assert_eq!(
+        compact_request.inputs_of_type("compaction_trigger").len(),
+        1
+    );
+    let compact_body = compact_request.body_json();
+    let compact_instructions = compact_body["instructions"]
+        .as_str()
+        .expect("compact instructions should be a string");
+    assert!(compact_instructions.contains("<compaction_guidance>"));
+    assert!(compact_instructions.contains(guidance));
+    assert!(compact_instructions.contains("</compaction_guidance>"));
+    assert!(
+        compact_request
+            .input()
+            .iter()
+            .all(|item| !item.to_string().contains(guidance)),
+        "compaction guidance must not be persisted as a history item"
+    );
+    assert!(response_requests[2].input().iter().any(|item| {
+        item["type"] == "compaction"
+            && item["encrypted_content"] == "BEDROCK_REMOTE_COMPACTED_SUMMARY"
+    }));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_retains_metadata_from_resumed_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

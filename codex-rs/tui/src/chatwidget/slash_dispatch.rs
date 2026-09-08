@@ -15,6 +15,7 @@ use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
+use codex_protocol::protocol::MAX_COMPACTION_GUIDANCE_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -271,7 +272,6 @@ impl ChatWidget {
                     self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
                     return;
                 }
-                self.clear_token_usage();
                 if !self.bottom_pane.is_task_running() {
                     self.bottom_pane.set_task_running(/*running*/ true);
                 }
@@ -731,6 +731,23 @@ impl ChatWidget {
         } = prepared;
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Compact => {
+                if self.blocks_direct_input {
+                    self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
+                    return;
+                }
+                if trimmed.len() > MAX_COMPACTION_GUIDANCE_BYTES {
+                    self.add_error_message(format!(
+                        "Compaction guidance exceeds the {MAX_COMPACTION_GUIDANCE_BYTES}-byte limit."
+                    ));
+                    return;
+                }
+                if !self.bottom_pane.is_task_running() {
+                    self.bottom_pane.set_task_running(/*running*/ true);
+                }
+                self.input_queue.user_turn_pending_start = true;
+                self.app_event_tx.compact_with_guidance(trimmed.to_string());
+            }
             SlashCommand::Export if trimmed.is_empty() => self.show_transcript_export_popup(),
             SlashCommand::Export => {
                 self.set_queue_autosend_suppressed(/*suppressed*/ true);

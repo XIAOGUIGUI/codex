@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::SessionTask;
 use super::SessionTaskResult;
 use super::emit_compact_metric;
+use crate::context::CompactionGuidance;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -13,8 +14,16 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct CompactTask;
+#[derive(Clone, Default)]
+pub(crate) struct CompactTask {
+    guidance: Option<CompactionGuidance>,
+}
+
+impl CompactTask {
+    pub(crate) fn new(guidance: Option<CompactionGuidance>) -> Self {
+        Self { guidance }
+    }
+}
 
 impl SessionTask for CompactTask {
     fn kind(&self) -> TaskKind {
@@ -33,7 +42,7 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
         let _profile_guard = ctx.turn_timing_state.begin_compaction();
-        if ctx.config.features.enabled(Feature::TokenBudget) {
+        if ctx.config.features.enabled(Feature::TokenBudget) && self.guidance.is_none() {
             crate::compact_token_budget::run_manual_compact_task(session, ctx).await?;
             return Ok(None);
         }
@@ -45,7 +54,12 @@ impl SessionTask for CompactTask {
                     "remote_v2",
                     /*manual*/ true,
                 );
-                crate::compact_remote_v2::run_remote_compact_task(session.clone(), ctx).await
+                crate::compact_remote_v2::run_remote_compact_task(
+                    session.clone(),
+                    ctx,
+                    self.guidance.as_ref(),
+                )
+                .await
             }
             RemoteCompactionSupport::Unsupported => {
                 emit_compact_metric(
@@ -53,13 +67,17 @@ impl SessionTask for CompactTask {
                     "local",
                     /*manual*/ true,
                 );
+                let mut prompt = ctx
+                    .config
+                    .compact_prompt
+                    .as_deref()
+                    .unwrap_or(crate::compact::SUMMARIZATION_PROMPT)
+                    .to_string();
+                if let Some(guidance) = self.guidance.as_ref() {
+                    guidance.append_to(&mut prompt);
+                }
                 let input = vec![UserInput::Text {
-                    text: ctx
-                        .config
-                        .compact_prompt
-                        .as_deref()
-                        .unwrap_or(crate::compact::SUMMARIZATION_PROMPT)
-                        .to_string(),
+                    text: prompt,
                     // Compaction prompt is synthesized; no UI element ranges to preserve.
                     text_elements: Vec::new(),
                 }];

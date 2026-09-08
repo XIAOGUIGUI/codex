@@ -15,6 +15,7 @@ use crate::session::thread_settings;
 use crate::session::turn_input;
 
 use crate::config::Config;
+use crate::context::CompactionGuidance;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianApprovedAction;
 use crate::context::NodeReplReviewEvidence;
@@ -244,12 +245,28 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
 }
 
-pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+pub async fn compact(sess: &Arc<Session>, sub_id: String, guidance: Option<String>) {
+    let guidance = match CompactionGuidance::parse(guidance) {
+        Ok(guidance) => guidance,
+        Err(message) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
+                    message,
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            })
+            .await;
+            return;
+        }
+    };
     let turn_context = sess
         .new_turn_with_default_settings(sub_id, Default::default())
         .await;
 
-    sess.spawn_task(turn_context, Vec::new(), CompactTask).await;
+    sess.spawn_task(turn_context, Vec::new(), CompactTask::new(guidance))
+        .await;
 }
 
 pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
@@ -686,7 +703,11 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::Compact => {
-                    compact(&sess, sub.id.clone()).await;
+                    compact(&sess, sub.id.clone(), None).await;
+                    false
+                }
+                Op::CompactWithGuidance { guidance } => {
+                    compact(&sess, sub.id.clone(), Some(guidance)).await;
                     false
                 }
                 Op::ThreadRollback { num_turns } => {

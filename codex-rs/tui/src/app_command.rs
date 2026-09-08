@@ -180,7 +180,9 @@ pub(crate) enum AppCommand {
         cwds: Vec<PathBuf>,
         force_reload: bool,
     },
-    Compact,
+    Compact {
+        guidance: Option<String>,
+    },
     SetThreadName {
         name: String,
     },
@@ -343,7 +345,13 @@ impl AppCommand {
     }
 
     pub(crate) fn compact() -> Self {
-        Self::Compact
+        Self::Compact { guidance: None }
+    }
+
+    pub(crate) fn compact_with_guidance(guidance: String) -> Self {
+        Self::Compact {
+            guidance: Some(guidance),
+        }
     }
 
     pub(crate) fn set_thread_name(name: String) -> Self {

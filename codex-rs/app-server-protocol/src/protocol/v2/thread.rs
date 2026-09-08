@@ -1118,6 +1118,9 @@ pub struct ThreadUnarchiveResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactStartParams {
     pub thread_id: String,
+    /// Optional instructions describing which context the compactor should prioritize.
+    #[ts(optional = nullable)]
+    pub guidance: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

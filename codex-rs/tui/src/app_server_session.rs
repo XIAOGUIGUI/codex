@@ -1550,7 +1550,11 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn thread_compact_start(&mut self, thread_id: ThreadId) -> Result<()> {
+    pub(crate) async fn thread_compact_start(
+        &mut self,
+        thread_id: ThreadId,
+        guidance: Option<String>,
+    ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadCompactStartResponse = self
             .client
@@ -1558,6 +1562,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadCompactStartParams {
                     thread_id: thread_id.to_string(),
+                    guidance,
                 },
             })
             .await

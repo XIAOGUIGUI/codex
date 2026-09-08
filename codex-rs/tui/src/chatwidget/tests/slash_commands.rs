@@ -157,7 +157,7 @@ async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
 
     assert!(chat.bottom_pane.is_task_running());
     match rx.try_recv() {
-        Ok(AppEvent::CodexOp(Op::Compact)) => {}
+        Ok(AppEvent::CodexOp(Op::Compact { guidance: None })) => {}
         other => panic!("expected compact op to be submitted, got {other:?}"),
     }
 
@@ -175,6 +175,25 @@ async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
         "queued before compact turn start"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_compact_with_args_submits_bounded_guidance() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/compact preserve the deployment evidence");
+
+    assert!(chat.bottom_pane.is_task_running());
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::Compact {
+                guidance: Some(guidance),
+            }) if guidance == "preserve the deployment evidence"
+        )),
+        "expected guided compact op; events: {events:?}"
+    );
 }
 
 #[tokio::test]
@@ -218,7 +237,7 @@ async fn queued_slash_compact_dispatches_after_active_turn() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, AppEvent::CodexOp(Op::Compact))),
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::Compact { .. }))),
         "expected queued /compact to submit compact op; events: {events:?}"
     );
 }

@@ -51,6 +51,12 @@ impl AppEventSender {
         self.send(AppEvent::CodexOp(AppCommand::compact()));
     }
 
+    pub(crate) fn compact_with_guidance(&self, guidance: String) {
+        self.send(AppEvent::CodexOp(AppCommand::compact_with_guidance(
+            guidance,
+        )));
+    }
+
     pub(crate) fn set_thread_name(&self, name: String) {
         self.send(AppEvent::CodexOp(AppCommand::set_thread_name(name)));
     }

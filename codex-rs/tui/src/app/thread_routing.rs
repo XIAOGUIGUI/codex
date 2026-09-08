@@ -900,8 +900,10 @@ impl App {
                 );
                 Ok(true)
             }
-            AppCommand::Compact => {
-                app_server.thread_compact_start(thread_id).await?;
+            AppCommand::Compact { guidance } => {
+                app_server
+                    .thread_compact_start(thread_id, guidance.clone())
+                    .await?;
                 Ok(true)
             }
             AppCommand::SetThreadName { name } => {
