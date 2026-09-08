@@ -939,7 +939,7 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 
 ### Example: Trigger thread compaction
 
-Use `thread/compact/start` to trigger manual history compaction for a thread. The request returns immediately with `{}`.
+Use `thread/compact/start` to trigger manual history compaction for a thread. The optional `guidance` field tells the compactor what context to prioritize; it is limited to 2,048 UTF-8 bytes. The request returns immediately with `{}`.
 
 Progress is emitted as standard `turn/*` and `item/*` notifications on the same `threadId`. Clients should expect a single compaction item:
 
@@ -949,7 +949,7 @@ Progress is emitted as standard `turn/*` and `item/*` notifications on the same 
 While compaction is running, the thread is effectively in a turn so clients should surface progress UI based on the notifications.
 
 ```json
-{ "method": "thread/compact/start", "id": 25, "params": { "threadId": "thr_b" } }
+{ "method": "thread/compact/start", "id": 25, "params": { "threadId": "thr_b", "guidance": "Preserve the deployment commands and verification results." } }
 { "id": 25, "result": {} }
 ```
 

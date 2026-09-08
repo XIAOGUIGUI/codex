@@ -163,7 +163,8 @@ impl SlashCommand {
     pub fn supports_inline_args(self) -> bool {
         matches!(
             self,
-            SlashCommand::Review
+            SlashCommand::Compact
+                | SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::New
                 | SlashCommand::Clear

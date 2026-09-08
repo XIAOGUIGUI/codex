@@ -21,6 +21,7 @@ use codex_protocol::SanitizedGitUrl;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::protocol::MAX_COMPACTION_GUIDANCE_BYTES;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
 
@@ -2349,11 +2350,26 @@ impl ThreadRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadCompactStartParams,
     ) -> Result<ThreadCompactStartResponse, JSONRPCErrorError> {
-        let ThreadCompactStartParams { thread_id } = params;
+        let ThreadCompactStartParams {
+            thread_id,
+            guidance,
+        } = params;
+        if guidance
+            .as_ref()
+            .is_some_and(|guidance| guidance.trim().len() > MAX_COMPACTION_GUIDANCE_BYTES)
+        {
+            return Err(invalid_request(format!(
+                "compaction guidance exceeds the {MAX_COMPACTION_GUIDANCE_BYTES}-byte limit"
+            )));
+        }
 
         let (_, thread) = self.load_thread(&thread_id).await?;
         ensure_direct_input_allowed(thread.as_ref()).await?;
-        self.submit_core_op(request_id, thread.as_ref(), Op::Compact)
+        let op = match guidance {
+            Some(guidance) => Op::CompactWithGuidance { guidance },
+            None => Op::Compact,
+        };
+        self.submit_core_op(request_id, thread.as_ref(), op)
             .await
             .map_err(|err| internal_error(format!("failed to start compaction: {err}")))?;
         Ok(ThreadCompactStartResponse {})

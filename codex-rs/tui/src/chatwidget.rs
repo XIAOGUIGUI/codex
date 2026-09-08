@@ -1788,7 +1788,9 @@ impl ChatWidget {
         if self.blocks_direct_input
             && matches!(
                 &op,
-                AppCommand::UserTurn { .. } | AppCommand::Review { .. } | AppCommand::Compact
+                AppCommand::UserTurn { .. }
+                    | AppCommand::Review { .. }
+                    | AppCommand::Compact { .. }
             )
         {
             self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
@@ -1825,7 +1827,7 @@ impl ChatWidget {
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
         if matches!(
             op,
-            AppCommand::Compact
+            AppCommand::Compact { .. }
                 | AppCommand::Review { .. }
                 | AppCommand::RunUserShellCommand { .. }
         ) {
@@ -1971,10 +1973,6 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
         self.bottom_pane.status_line_text()
-    }
-
-    pub(crate) fn clear_token_usage(&mut self) {
-        self.token_info = None;
     }
 }
 
