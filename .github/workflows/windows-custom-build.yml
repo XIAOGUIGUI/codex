@@ -292,9 +292,8 @@ jobs:
           retention-days: 7
 
   publish:
-    name: Publish Windows npm package
+    name: Verify and publish Windows npm package
     needs: [test, build]
-    if: ${{ inputs.publish_npm }}
     runs-on: windows-2025
     timeout-minutes: 20
     permissions:
@@ -316,6 +315,18 @@ jobs:
           name: codex-windows-x64-npm-package
           path: dist/windows-overlay
 
+      - name: Verify downloaded npm package
+        shell: pwsh
+        run: |
+          $packagePath = "dist/windows-overlay/chenronggui-codex-win-patch-$env:PACKAGE_VERSION.tgz"
+          if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
+              throw "Downloaded npm package was not found at $packagePath."
+          }
+          $package = Get-Item -LiteralPath $packagePath
+          $hash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "npm package: $($package.Name) ($($package.Length) bytes), SHA256 $hash" |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
       - name: Check npm package version availability
         shell: pwsh
         run: |
@@ -331,6 +342,7 @@ jobs:
           exit 0
 
       - name: Publish tested npm package
+        if: ${{ inputs.publish_npm }}
         shell: pwsh
         working-directory: dist/windows-overlay
         run: npm publish "./chenronggui-codex-win-patch-$env:PACKAGE_VERSION.tgz" --access public --tag latest
