@@ -1,7 +1,7 @@
 {
   "name": "@chenronggui/codex-win-patch",
   "version": "0.0.0-dev",
-  "description": "Unofficial Windows x64 binary overlay for the OpenAI Codex CLI.",
+  "description": "面向 OpenAI Codex CLI 的非官方 Windows x64 补丁。",
   "license": "Apache-2.0",
   "type": "commonjs",
   "repository": {
@@ -31,6 +31,7 @@
     "apply_patch.exe",
     "build-info.json",
     "codex.exe",
+    "docs",
     "install.ps1",
     "LICENSE",
     "README.md",
