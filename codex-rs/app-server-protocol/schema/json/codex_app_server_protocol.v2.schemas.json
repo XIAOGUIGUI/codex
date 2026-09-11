@@ -8791,6 +8791,7 @@
         "sessionStart",
         "sessionEnd",
         "userPromptSubmit",
+        "userInputRequest",
         "subagentStart",
         "subagentStop",
         "stop",
@@ -10041,6 +10042,13 @@
           "type": "array"
         },
         "SubagentStop": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
+        "UserInputRequest": {
+          "default": [],
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
           },

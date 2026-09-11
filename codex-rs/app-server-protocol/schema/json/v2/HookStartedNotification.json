@@ -15,6 +15,7 @@
         "sessionStart",
         "sessionEnd",
         "userPromptSubmit",
+        "userInputRequest",
         "subagentStart",
         "subagentStop",
         "stop",

@@ -1898,6 +1898,13 @@
           },
           "type": "array"
         },
+        "UserInputRequest": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "default": [],
           "items": {

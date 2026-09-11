@@ -2962,6 +2962,29 @@ impl Session {
         args: RequestUserInputArgs,
     ) -> Option<RequestUserInputResponse> {
         let _elicitation = self.services.elicitations.register();
+        let hook_outcome = self
+            .hooks()
+            .run_user_input_request(codex_hooks::UserInputRequestRequest {
+                session_id: self.session_id().into(),
+                turn_id: turn_context.sub_id.clone(),
+                #[allow(deprecated)]
+                cwd: turn_context.cwd.to_path_buf(),
+                transcript_path: self.hook_transcript_path().await,
+                call_id: call_id.clone(),
+                questions: args.questions.clone(),
+                is_blocking: args.is_blocking,
+            })
+            .await;
+        crate::hook_runtime::emit_hook_completed_events(
+            self,
+            turn_context,
+            hook_outcome.hook_events,
+        )
+        .await;
+        if hook_outcome.response.is_some() {
+            return hook_outcome.response;
+        }
+
         let sub_id = turn_context.sub_id.clone();
         let (tx_response, rx_response) = oneshot::channel();
         let event_id = sub_id.clone();

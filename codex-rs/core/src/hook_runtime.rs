@@ -869,8 +869,8 @@ async fn emit_hook_started_events(
 }
 
 pub(crate) async fn emit_hook_completed_events(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    sess: &Session,
+    turn_context: &TurnContext,
     completed_events: Vec<HookCompletedEvent>,
 ) {
     if turn_context.config.memories.disable_on_external_context
@@ -917,8 +917,8 @@ fn emit_hook_completed_metrics(turn_context: &TurnContext, completed: &HookCompl
 }
 
 fn track_hook_completed_analytics(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    sess: &Session,
+    turn_context: &TurnContext,
     completed: &HookCompletedEvent,
 ) {
     let (tracking, hook) =
@@ -963,6 +963,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::SessionStart => "SessionStart",
         HookEventName::SessionEnd => "SessionEnd",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::UserInputRequest => "UserInputRequest",
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
