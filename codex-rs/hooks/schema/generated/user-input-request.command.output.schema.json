@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "RequestUserInputAnswer": {
+      "properties": {
+        "answers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "answers"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "answers": {
+      "additionalProperties": {
+        "$ref": "#/definitions/RequestUserInputAnswer"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "answers"
+  ],
+  "title": "user-input-request.command.output",
+  "type": "object"
+}

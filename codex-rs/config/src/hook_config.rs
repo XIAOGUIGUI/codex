@@ -50,6 +50,8 @@ pub struct HookEventsToml {
     pub session_end: Vec<MatcherGroup>,
     #[serde(rename = "UserPromptSubmit", default)]
     pub user_prompt_submit: Vec<MatcherGroup>,
+    #[serde(rename = "UserInputRequest", default)]
+    pub user_input_request: Vec<MatcherGroup>,
     #[serde(rename = "SubagentStart", default)]
     pub subagent_start: Vec<MatcherGroup>,
     #[serde(rename = "SubagentStop", default)]
@@ -71,6 +73,7 @@ impl HookEventsToml {
             session_start,
             session_end,
             user_prompt_submit,
+            user_input_request,
             subagent_start,
             subagent_stop,
             stop,
@@ -84,6 +87,7 @@ impl HookEventsToml {
             && session_start.is_empty()
             && session_end.is_empty()
             && user_prompt_submit.is_empty()
+            && user_input_request.is_empty()
             && subagent_start.is_empty()
             && subagent_stop.is_empty()
             && stop.is_empty()
@@ -100,6 +104,7 @@ impl HookEventsToml {
             session_start,
             session_end,
             user_prompt_submit,
+            user_input_request,
             subagent_start,
             subagent_stop,
             stop,
@@ -114,6 +119,7 @@ impl HookEventsToml {
             session_start,
             session_end,
             user_prompt_submit,
+            user_input_request,
             subagent_start,
             subagent_stop,
             stop,
@@ -125,12 +131,12 @@ impl HookEventsToml {
         .sum()
     }
 
-    pub fn into_matcher_groups(mut self) -> [(HookEventName, Vec<MatcherGroup>); 12] {
+    pub fn into_matcher_groups(mut self) -> [(HookEventName, Vec<MatcherGroup>); 13] {
         self.matcher_groups_mut()
             .map(|(event, groups)| (event, std::mem::take(groups)))
     }
 
-    pub fn matcher_groups_mut(&mut self) -> [(HookEventName, &mut Vec<MatcherGroup>); 12] {
+    pub fn matcher_groups_mut(&mut self) -> [(HookEventName, &mut Vec<MatcherGroup>); 13] {
         use HookEventName as Event;
 
         [
@@ -142,6 +148,7 @@ impl HookEventsToml {
             (Event::SessionStart, &mut self.session_start),
             (Event::SessionEnd, &mut self.session_end),
             (Event::UserPromptSubmit, &mut self.user_prompt_submit),
+            (Event::UserInputRequest, &mut self.user_input_request),
             (Event::SubagentStart, &mut self.subagent_start),
             (Event::SubagentStop, &mut self.subagent_stop),
             (Event::Stop, &mut self.stop),

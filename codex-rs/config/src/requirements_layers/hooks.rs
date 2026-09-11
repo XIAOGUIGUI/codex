@@ -212,6 +212,7 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
         session_start,
         session_end,
         user_prompt_submit,
+        user_input_request,
         subagent_start,
         subagent_stop,
         stop,
@@ -227,6 +228,7 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
     changed |= append_vec(&mut existing.session_start, session_start);
     changed |= append_vec(&mut existing.session_end, session_end);
     changed |= append_vec(&mut existing.user_prompt_submit, user_prompt_submit);
+    changed |= append_vec(&mut existing.user_input_request, user_input_request);
     changed |= append_vec(&mut existing.subagent_start, subagent_start);
     changed |= append_vec(&mut existing.subagent_stop, subagent_stop);
     changed |= append_vec(&mut existing.stop, stop);

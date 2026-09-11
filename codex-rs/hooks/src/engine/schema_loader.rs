@@ -23,6 +23,8 @@ pub(crate) struct GeneratedHookSchemas {
     pub subagent_stop_command_output: Value,
     pub user_prompt_submit_command_input: Value,
     pub user_prompt_submit_command_output: Value,
+    pub user_input_request_command_input: Value,
+    pub user_input_request_command_output: Value,
     pub stop_command_input: Value,
     pub stop_command_output: Value,
     pub interrupt_command_input: Value,
@@ -108,6 +110,14 @@ pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
             "user-prompt-submit.command.output",
             include_str!("../../schema/generated/user-prompt-submit.command.output.schema.json"),
         ),
+        user_input_request_command_input: parse_json_schema(
+            "user-input-request.command.input",
+            include_str!("../../schema/generated/user-input-request.command.input.schema.json"),
+        ),
+        user_input_request_command_output: parse_json_schema(
+            "user-input-request.command.output",
+            include_str!("../../schema/generated/user-input-request.command.output.schema.json"),
+        ),
         stop_command_input: parse_json_schema(
             "stop.command.input",
             include_str!("../../schema/generated/stop.command.input.schema.json"),
@@ -160,6 +170,8 @@ mod tests {
         assert_eq!(schemas.subagent_stop_command_output["type"], "object");
         assert_eq!(schemas.user_prompt_submit_command_input["type"], "object");
         assert_eq!(schemas.user_prompt_submit_command_output["type"], "object");
+        assert_eq!(schemas.user_input_request_command_input["type"], "object");
+        assert_eq!(schemas.user_input_request_command_output["type"], "object");
         assert_eq!(schemas.stop_command_input["type"], "object");
         assert_eq!(schemas.stop_command_output["type"], "object");
         assert_eq!(schemas.interrupt_command_input["type"], "object");

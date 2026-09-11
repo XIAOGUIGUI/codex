@@ -23,6 +23,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::user_input_request::UserInputRequestOutcome;
+use crate::events::user_input_request::UserInputRequestRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::mcp::HookMcpExecutor;
@@ -174,6 +176,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::SessionEnd => "session-end",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
+            codex_protocol::protocol::HookEventName::UserInputRequest => "user-input-request",
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
             codex_protocol::protocol::HookEventName::Stop => "stop",
@@ -454,6 +457,13 @@ impl ClaudeHooksEngine {
         request: UserPromptSubmitRequest,
     ) -> UserPromptSubmitOutcome {
         crate::events::user_prompt_submit::run(self, request).await
+    }
+
+    pub(crate) async fn run_user_input_request(
+        &self,
+        request: UserInputRequestRequest,
+    ) -> UserInputRequestOutcome {
+        crate::events::user_input_request::run(self, request).await
     }
 
     pub(crate) fn preview_stop(&self, request: &StopRequest) -> Vec<HookRunSummary> {
