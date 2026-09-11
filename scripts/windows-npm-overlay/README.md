@@ -1,154 +1,22 @@
-# Codex Windows x64 npm patch
+# Codex Windows x64 npm 补丁
 
-This unofficial community package replaces the native executable used by an
-existing global `@openai/codex` npm installation. It is intentionally Windows
-x64 only and is not published or supported by OpenAI.
+本目录用于构建发布为 `@chenronggui/codex-win-patch` 的非官方 Windows x64
+补丁。它会替换版本匹配的全局 `@openai/codex` 安装所使用的原生程序。
 
-`npm install -g @openai/codex` installs a JavaScript launcher plus an optional
-platform package. On Windows x64 the launcher ultimately runs:
+`Windows custom Codex overlay` 流水线会根据 `docs/templates` 自动生成所有
+版本相关说明。不要手工复制版本号、commit 或哈希。经过测试的流水线附件包含 npm
+tarball、对应的 SHA-256 文件、最终中文操作说明、发布清单和验证报告。
 
-```text
-@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe
-```
+安装方式只支持 npm。生成的包包含：
 
-Depending on npm's dependency layout, the platform package may instead be
-nested below `@openai\codex\node_modules`. The installer detects both layouts.
-It also installs the dedicated helper at:
+- `README.md` 和 `docs/操作说明.md`
+- `docs/验证提示词.md`
+- `docs/日志反馈说明.md`
+- `build-info.json` 和 `SHA256SUMS`
+- `codex.exe`、`apply_patch.exe` 以及安装/恢复命令入口
 
-```text
-vendor\x86_64-pc-windows-msvc\codex-path\apply_patch.exe
-```
+tarball 不能包含自己的 SHA-256，因为写入该值会再次改变 tarball。该哈希因此作为
+同一流水线附件中的配套文件生成；两个 EXE 的哈希会同时写入 npm 包和最终操作说明。
 
-## Install from npm
-
-Install the matching official package and patch version globally:
-
-```powershell
-npm install -g @openai/codex@0.153.4 @chenronggui/codex-win-patch@0.153.4-patch.2
-```
-
-The npm `postinstall` hook applies the patch automatically. It prefers
-PowerShell 7 (`pwsh.exe`) and falls back to Windows PowerShell 5.1
-(`powershell.exe`). Set `CODEX_WINDOWS_PATCH_POWERSHELL` to an executable path
-to select one explicitly.
-
-After an official Codex reinstall or upgrade, reapply the matching patch with:
-
-```powershell
-codex-win-patch-install
-```
-
-If npm lifecycle scripts were disabled with `--ignore-scripts`, use the same
-command to perform the installation explicitly.
-
-## Install from a workflow artifact
-
-Download the npm package artifact from the `Windows custom Codex overlay`
-workflow, extract it, and install the `.tgz` file:
-
-```powershell
-npm install -g @openai/codex@0.153.4
-npm install -g C:\Downloads\chenronggui-codex-win-patch-0.153.4-patch.2.tgz
-```
-
-## Install from the ZIP overlay
-
-1. Install the matching official package first:
-
-   ```powershell
-   npm install -g @openai/codex@0.153.4
-   ```
-
-2. Close all running Codex processes.
-3. Extract this ZIP and run it with PowerShell 7:
-
-   ```powershell
-   pwsh -File .\install.ps1
-   ```
-
-   Or use the built-in Windows PowerShell 5.1:
-
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-   ```
-
-The installer verifies the archive checksums, checks the installed npm version,
-backs up replaced files below
-`$env:USERPROFILE\.codex\backups\windows-npm-overlay`, installs both native
-executables, and runs `codex.exe --version`.
-
-Use `-NpmRoot <path>` when the npm global root cannot be detected. Use `-Force`
-only to override a version mismatch; it never overrides the running-process
-safety check.
-
-## Restore
-
-For an npm installation, restore the most recent backup with:
-
-```powershell
-codex-win-patch-restore
-```
-
-From the extracted ZIP, run:
-
-```powershell
-pwsh -File .\restore.ps1
-```
-
-The install command also prints an exact restore command for its backup. A
-later `npm install -g @openai/codex` may overwrite the overlay; reinstall the
-matching overlay after npm upgrades.
-
-## Publishing
-
-The `Windows custom Codex overlay` workflow is manual-only. Its `publish_npm`
-input defaults to `false`, so a normal run builds and tests the ZIP and `.tgz`
-artifacts without publishing anything. Publishing requires manually selecting
-`publish_npm: true`.
-
-For the first npm release, publish the downloaded `.tgz` once from an
-authenticated workstation:
-
-```powershell
-npm publish .\chenronggui-codex-win-patch-0.153.4-patch.2.tgz --access public
-```
-
-After the package exists, configure npm Trusted Publishing for repository
-`XIAOGUIGUI/codex` and workflow `windows-custom-build.yml`. Later releases can
-then use the workflow's publish option without a long-lived npm token.
-
-## File behavior in this build
-
-- Exact and trailing-whitespace matching preserve leading indentation.
-- UTF-8 BOM and existing CRLF/LF line endings are preserved by default.
-- UTF-16 and other non-UTF-8 files fail with an explicit error and remain
-  unchanged.
-- Patches that make no byte-level change fail instead of reporting success.
-- The native `apply_patch.exe` accepts UTF-8 patches on stdin, avoiding the
-  Windows command-line length limit.
-
-## Privacy-safe compatibility diagnostics
-
-This patch can record bounded structured evidence for Windows and custom model
-provider failures without storing prompts, source files, patches, commands, or
-raw tool arguments. Diagnostics are disabled by default and never upload data.
-
-Choose a directory outside `CODEX_HOME` and enable them in `config.toml`:
-
-```toml
-[compatibility_diagnostics]
-enabled = true
-directory = 'D:\CodexDiagnostics'
-retention_days = 30
-max_total_mib = 256
-```
-
-Inspect usage or create a bounded ZIP suitable for external analysis:
-
-```powershell
-codex debug compatibility-diagnostics status --json
-codex debug compatibility-diagnostics report --since 7d --output D:\CodexReports\codex-compatibility-report.zip
-```
-
-The report contains aggregate counts, stable error fingerprints, bounded
-content-free samples, candidate upstream issue links, and a printed SHA-256.
+npm 发布使用 GitHub OIDC trusted publishing。只有 Windows 测试、打包、隔离安装和
+发布材料校验全部通过后，流水线才会标记 `PUBLISHABLE` 并允许发布。

@@ -10,7 +10,10 @@ param(
     [string]$ApplyPatchExe,
 
     [Parameter(Mandatory = $true)]
-    [string]$UpstreamVersion
+    [string]$UpstreamVersion,
+
+    [Parameter(Mandatory = $true)]
+    [string]$PackageVersion
 )
 
 Set-StrictMode -Version Latest
@@ -93,6 +96,7 @@ $ApplyPatchExe = (Resolve-Path -LiteralPath $ApplyPatchExe).Path
 $testDirectory = Join-Path ([IO.Path]::GetTempPath()) ("codex-npm-overlay-" + [Guid]::NewGuid().ToString("N"))
 $npmPrefix = Join-Path $testDirectory "npm-prefix"
 $globalNpmRoot = Join-Path $npmPrefix "node_modules"
+$installedPatchDirectory = Join-Path $globalNpmRoot "@chenronggui\codex-win-patch"
 $packageDirectory = Join-Path $globalNpmRoot "@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc"
 $codexTarget = Join-Path $packageDirectory "bin\codex.exe"
 $applyPatchTarget = Join-Path $packageDirectory "codex-path\apply_patch.exe"
@@ -130,6 +134,39 @@ try {
     Assert-Equal (Get-Sha256 $CodexExe) (Get-Sha256 $codexTarget) "postinstall codex.exe hash"
     Assert-Equal (Get-Sha256 $ApplyPatchExe) (Get-Sha256 $applyPatchTarget) "postinstall apply_patch.exe hash"
 
+    $installedBuildInfo = Get-Content -LiteralPath (Join-Path $installedPatchDirectory "build-info.json") -Raw | ConvertFrom-Json
+    Assert-Equal $PackageVersion $installedBuildInfo.packageVersion "installed package build identity"
+    $operationGuide = $null
+    foreach ($relativePath in @(
+        "README.md",
+        "docs\操作说明.md",
+        "docs\日志反馈说明.md",
+        "docs\验证提示词.md"
+    )) {
+        $installedDocument = Join-Path $installedPatchDirectory $relativePath
+        if (-not (Test-Path -LiteralPath $installedDocument -PathType Leaf)) {
+            throw "Installed npm package is missing $relativePath."
+        }
+        $documentText = [IO.File]::ReadAllText($installedDocument)
+        if ($documentText -match '{{[A-Z0-9_]+}}') {
+            throw "Installed document contains an unresolved template value: $relativePath."
+        }
+        if ($relativePath -eq "docs\操作说明.md") {
+            $operationGuide = $documentText
+        }
+    }
+    foreach ($expectedValue in @(
+        $UpstreamVersion,
+        $PackageVersion,
+        $installedBuildInfo.commit,
+        (Get-Sha256 $CodexExe),
+        (Get-Sha256 $ApplyPatchExe)
+    )) {
+        if (-not $operationGuide.Contains($expectedValue)) {
+            throw "Installed operation guide is missing release identity '$expectedValue'."
+        }
+    }
+
     $installCommand = Join-Path $npmPrefix "codex-win-patch-install.cmd"
     $restoreCommand = Join-Path $npmPrefix "codex-win-patch-restore.cmd"
     Invoke-ExpectSuccess $restoreCommand @()
@@ -146,7 +183,6 @@ try {
     Assert-Equal $originalCodexSha256 (Get-Sha256 $codexTarget) "version mismatch target hash"
     Write-PackageManifest $packageManifestPath $UpstreamVersion
 
-    $installedPatchDirectory = Join-Path $globalNpmRoot "@chenronggui\codex-win-patch"
     $checksumPath = Join-Path $installedPatchDirectory "SHA256SUMS"
     $originalChecksums = [IO.File]::ReadAllText($checksumPath)
     $corruptedChecksums = $originalChecksums -replace '^[0-9a-fA-F]{64}', ('0' * 64)

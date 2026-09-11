@@ -6,7 +6,6 @@ on:
       patch_revision:
         description: Patch package revision appended to the Codex version
         required: true
-        default: "2"
         type: string
       publish_npm:
         description: Publish the generated package to npm
@@ -201,7 +200,9 @@ jobs:
           $distDirectory = "$env:GITHUB_WORKSPACE\dist\windows-overlay"
           $zipStageDirectory = "${{ steps.stage.outputs.stage_directory }}"
           $npmStageDirectory = Join-Path $distDirectory "npm-package"
+          $releaseDirectory = Join-Path $distDirectory "npm-release"
           New-Item -ItemType Directory -Path $npmStageDirectory -Force | Out-Null
+          New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
 
           foreach ($fileName in @(
               "apply_patch.exe",
@@ -224,6 +225,24 @@ jobs:
           $packageJsonText = $packageJson | ConvertTo-Json -Depth 10
           [IO.File]::WriteAllText($packageJsonPath, $packageJsonText, [Text.UTF8Encoding]::new($false))
 
+          $buildInfoPath = Join-Path $npmStageDirectory "build-info.json"
+          $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
+          $buildInfo | Add-Member -NotePropertyName packageVersion -NotePropertyValue $packageVersion
+          $buildInfoText = $buildInfo | ConvertTo-Json -Depth 10
+          [IO.File]::WriteAllText($buildInfoPath, $buildInfoText, [Text.UTF8Encoding]::new($false))
+
+          $workflowRunUrl = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          & "$env:GITHUB_WORKSPACE\scripts\windows-npm-overlay\generate-release-docs.ps1" `
+            -Mode Package `
+            -PayloadDirectory $npmStageDirectory `
+            -OutputDirectory $npmStageDirectory `
+            -UpstreamVersion $upstreamVersion `
+            -PackageVersion $packageVersion `
+            -Commit $env:GITHUB_SHA `
+            -Repository $env:GITHUB_REPOSITORY `
+            -WorkflowRunUrl $workflowRunUrl `
+            -BuiltAtUtc $buildInfo.builtAtUtc
+
           Push-Location $npmStageDirectory
           try {
               $dryRun = npm pack --dry-run --json | ConvertFrom-Json
@@ -239,6 +258,9 @@ jobs:
                   "bin/restore.js",
                   "build-info.json",
                   "codex.exe",
+                  "docs/操作说明.md",
+                  "docs/日志反馈说明.md",
+                  "docs/验证提示词.md",
                   "install.ps1",
                   "package.json",
                   "restore.ps1"
@@ -247,15 +269,29 @@ jobs:
                   throw "Unexpected npm package contents.`nExpected:`n$($expectedFiles -join "`n")`nActual:`n$($actualFiles -join "`n")"
               }
 
-              $packResult = npm pack --json --pack-destination $distDirectory | ConvertFrom-Json
+              $packResult = npm pack --json --pack-destination $releaseDirectory | ConvertFrom-Json
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally {
               Pop-Location
           }
 
-          $packagePath = Join-Path $distDirectory $packResult.filename
+          $packagePath = Join-Path $releaseDirectory $packResult.filename
+          & "$env:GITHUB_WORKSPACE\scripts\windows-npm-overlay\generate-release-docs.ps1" `
+            -Mode Release `
+            -PayloadDirectory $npmStageDirectory `
+            -OutputDirectory $releaseDirectory `
+            -UpstreamVersion $upstreamVersion `
+            -PackageVersion $packageVersion `
+            -Commit $env:GITHUB_SHA `
+            -Repository $env:GITHUB_REPOSITORY `
+            -WorkflowRunUrl $workflowRunUrl `
+            -BuiltAtUtc $buildInfo.builtAtUtc `
+            -TarballPath $packagePath `
+            -NpmShasum $packResult.shasum `
+            -NpmIntegrity $packResult.integrity
           "package=$packagePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "package_version=$packageVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "release_directory=$releaseDirectory" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Test npm package installation
         shell: pwsh
@@ -264,7 +300,48 @@ jobs:
             -PackageTarball "${{ steps.stage_npm.outputs.package }}" `
             -CodexExe "$env:CARGO_TARGET_DIR\$env:TARGET\release\codex.exe" `
             -ApplyPatchExe "$env:CARGO_TARGET_DIR\$env:TARGET\release\apply_patch.exe" `
-            -UpstreamVersion "${{ steps.stage.outputs.version }}"
+            -UpstreamVersion "${{ steps.stage.outputs.version }}" `
+            -PackageVersion "${{ steps.stage_npm.outputs.package_version }}"
+
+      - name: Record package validation result
+        shell: pwsh
+        run: |
+          $releaseDirectory = "${{ steps.stage_npm.outputs.release_directory }}"
+          $packageVersion = "${{ steps.stage_npm.outputs.package_version }}"
+          $report = @"
+          # Windows npm 补丁验证：$packageVersion
+
+          - 包验证状态：PACKAGE_VALIDATION_PASS
+          - 原生 apply_patch 冒烟测试：PASS
+          - npm 隔离安装、恢复、哈希、版本及安全测试：PASS
+          - 构建 commit：$env:GITHUB_SHA
+          - 流水线：https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+
+          独立 test job 也必须通过，publish job 才能运行。
+          "@
+          [IO.File]::WriteAllText(
+              (Join-Path $releaseDirectory "验证报告-$packageVersion.md"),
+              $report,
+              [Text.UTF8Encoding]::new($false)
+          )
+          $expectedReleaseFiles = @(
+              "chenronggui-codex-win-patch-$packageVersion.tgz",
+              "chenronggui-codex-win-patch-$packageVersion.tgz.sha256",
+              "docs\操作说明.md",
+              "docs\日志反馈说明.md",
+              "docs\验证提示词.md",
+              "README.md",
+              "release-manifest.json",
+              "操作说明-$packageVersion.md",
+              "验证报告-$packageVersion.md"
+          )
+          foreach ($relativePath in $expectedReleaseFiles) {
+              if (-not (Test-Path -LiteralPath (Join-Path $releaseDirectory $relativePath) -PathType Leaf)) {
+                  throw "Release materials are missing $relativePath."
+              }
+          }
+          "## Windows npm 补丁 $packageVersion" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "PACKAGE_VALIDATION_PASS：npm 包与 Windows 冒烟测试均已通过。" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Upload Windows overlay
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -278,7 +355,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: codex-windows-x64-npm-package
-          path: ${{ steps.stage_npm.outputs.package }}
+          path: ${{ steps.stage_npm.outputs.release_directory }}
           if-no-files-found: error
           retention-days: 14
 
@@ -324,6 +401,13 @@ jobs:
           }
           $package = Get-Item -LiteralPath $packagePath
           $hash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = Get-Content -LiteralPath "dist/windows-overlay/release-manifest.json" -Raw | ConvertFrom-Json
+          if ($manifest.packageVersion -ne $env:PACKAGE_VERSION) {
+              throw "Release manifest version does not match $env:PACKAGE_VERSION."
+          }
+          if ($manifest.tarball.sha256 -ne $hash) {
+              throw "Downloaded npm package SHA-256 does not match release-manifest.json."
+          }
           "npm package: $($package.Name) ($($package.Length) bytes), SHA256 $hash" |
             Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
@@ -341,8 +425,40 @@ jobs:
           }
           exit 0
 
+      - name: Mark package publishable
+        shell: pwsh
+        run: |
+          "## PUBLISHABLE：$env:PACKAGE_VERSION" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "Windows 测试、构建、隔离安装及发布材料校验均已通过。" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
       - name: Publish tested npm package
         if: ${{ inputs.publish_npm }}
         shell: pwsh
         working-directory: dist/windows-overlay
         run: npm publish "./chenronggui-codex-win-patch-$env:PACKAGE_VERSION.tgz" --access public --tag latest
+
+      - name: Verify published registry identity
+        if: ${{ inputs.publish_npm }}
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -LiteralPath "dist/windows-overlay/release-manifest.json" -Raw | ConvertFrom-Json
+          $package = "@chenronggui/codex-win-patch@$env:PACKAGE_VERSION"
+          $dist = $null
+          for ($attempt = 1; $attempt -le 6; $attempt++) {
+              $distText = npm view $package dist --json 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                  $dist = $distText | ConvertFrom-Json
+                  break
+              }
+              Start-Sleep -Seconds 5
+          }
+          if ($null -eq $dist) {
+              throw "Published package did not become visible in the npm registry."
+          }
+          if ($dist.shasum -ne $manifest.tarball.npmShasum -or
+              $dist.integrity -ne $manifest.tarball.npmIntegrity) {
+              throw "Published npm integrity metadata does not match the tested tarball."
+          }
+          "Published and registry-verified: $package" |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
