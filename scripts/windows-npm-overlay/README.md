@@ -9,14 +9,17 @@ tarball、对应的 SHA-256 文件、最终中文操作说明、发布清单和�
 
 安装方式只支持 npm。生成的包包含：
 
-- `README.md` 和 `docs/操作说明.md`
-- `docs/验证提示词.md`
-- `docs/日志反馈说明.md`
+- `README.md` 和 `docs/operation-guide.zh-CN.md`
+- `docs/validation-prompt.zh-CN.md`
+- `docs/diagnostics-guide.zh-CN.md`
 - `build-info.json` 和 `SHA256SUMS`
 - `codex.exe`、`apply_patch.exe` 以及安装/恢复命令入口
 
 tarball 不能包含自己的 SHA-256，因为写入该值会再次改变 tarball。该哈希因此作为
 同一流水线附件中的配套文件生成；两个 EXE 的哈希会同时写入 npm 包和最终操作说明。
+
+发布物中的路径和文件名只使用 ASCII；`.zh-CN.md` 表示正文为中文，避免 ZIP、TAR
+或企业解压软件错误解释 UTF-8 文件名。
 
 npm 发布使用 GitHub OIDC trusted publishing。只有 Windows 测试、打包、隔离安装和
 发布材料校验全部通过后，流水线才会标记 `PUBLISHABLE` 并允许发布。

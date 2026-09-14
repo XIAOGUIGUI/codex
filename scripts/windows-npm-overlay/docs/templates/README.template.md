@@ -12,9 +12,9 @@ codex --version
 
 完整操作、AI 验收及日志反馈说明位于：
 
-- `docs/操作说明.md`
-- `docs/验证提示词.md`
-- `docs/日志反馈说明.md`
+- `docs/operation-guide.zh-CN.md`
+- `docs/validation-prompt.zh-CN.md`
+- `docs/diagnostics-guide.zh-CN.md`
 
 构建 commit：`{{COMMIT}}`
 

@@ -139,9 +139,9 @@ try {
     $operationGuide = $null
     foreach ($relativePath in @(
         "README.md",
-        "docs\操作说明.md",
-        "docs\日志反馈说明.md",
-        "docs\验证提示词.md"
+        "docs\operation-guide.zh-CN.md",
+        "docs\diagnostics-guide.zh-CN.md",
+        "docs\validation-prompt.zh-CN.md"
     )) {
         $installedDocument = Join-Path $installedPatchDirectory $relativePath
         if (-not (Test-Path -LiteralPath $installedDocument -PathType Leaf)) {
@@ -151,7 +151,7 @@ try {
         if ($documentText -match '{{[A-Z0-9_]+}}') {
             throw "Installed document contains an unresolved template value: $relativePath."
         }
-        if ($relativePath -eq "docs\操作说明.md") {
+        if ($relativePath -eq "docs\operation-guide.zh-CN.md") {
             $operationGuide = $documentText
         }
     }
