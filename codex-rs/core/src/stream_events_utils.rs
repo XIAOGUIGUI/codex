@@ -17,6 +17,8 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::tool_log_payload;
+use crate::tools::tool_call_loop::ToolCallLoopDecision;
+use crate::tools::tool_call_loop::ToolCallLoopDetector;
 use codex_diagnostics::CompatibilityOutcome;
 use codex_diagnostics::TextIntegrityEventInput;
 use codex_diagnostics::ToolRepresentation;
@@ -218,6 +220,7 @@ pub(crate) struct HandleOutputCtx {
     pub step_context: Arc<StepContext>,
     pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
+    pub tool_call_loop_detector: Arc<ToolCallLoopDetector>,
     pub cancellation_token: CancellationToken,
 }
 
@@ -366,6 +369,76 @@ pub(crate) async fn handle_output_item_done(
 
             record_completed_response_item(ctx.sess.as_ref(), ctx.step_context.as_ref(), &item)
                 .await;
+
+            let representation = match &call.payload {
+                crate::tools::context::ToolPayload::Function { .. } => ToolRepresentation::Function,
+                crate::tools::context::ToolPayload::ToolSearch { .. } => {
+                    ToolRepresentation::ToolSearch
+                }
+                crate::tools::context::ToolPayload::Custom { .. } => ToolRepresentation::Custom,
+            };
+            let input_bytes = match &call.payload {
+                crate::tools::context::ToolPayload::Function { arguments } => arguments.len(),
+                crate::tools::context::ToolPayload::ToolSearch { arguments } => {
+                    arguments.query.len()
+                }
+                crate::tools::context::ToolPayload::Custom { input } => input.len(),
+            };
+            match ctx.tool_call_loop_detector.observe(&call) {
+                ToolCallLoopDecision::Allow => {}
+                ToolCallLoopDecision::Reject { attempt } => {
+                    const MESSAGE: &str = "Repeated identical tool call blocked after two executions. Do not retry the same tool with the same arguments. Use materially different arguments, use a different tool, re-read the relevant state, or ask the user for help.";
+                    tracing::warn!(
+                        tool_name = %call.tool_name,
+                        attempt,
+                        "blocked repeated identical model tool call"
+                    );
+                    ctx.sess.services.compatibility_diagnostics.record(
+                        codex_diagnostics::CompatibilityEventInput {
+                            phase: "model.tool_loop.rejected",
+                            outcome: CompatibilityOutcome::Failure,
+                            tool_name: Some(call.tool_name.name.as_str()),
+                            tool_namespace: call.tool_name.namespace.as_deref(),
+                            representation,
+                            duration: std::time::Duration::ZERO,
+                            input_bytes,
+                            output_bytes: MESSAGE.len(),
+                            error: Some("repeated identical tool call"),
+                        },
+                    );
+                    let response = ToolCallRuntime::failure_response(
+                        call,
+                        FunctionCallError::RespondToModel(MESSAGE.to_string()),
+                    );
+                    output.needs_follow_up = true;
+                    output.tool_future = Some(Box::pin(async move {
+                        Ok(ResponseItemEnvelope::new(response.into()))
+                    }));
+                    return Ok(output);
+                }
+                ToolCallLoopDecision::Abort { attempt } => {
+                    const MESSAGE: &str = "Turn aborted because the model repeated the same tool call after receiving loop-recovery guidance.";
+                    tracing::warn!(
+                        tool_name = %call.tool_name,
+                        attempt,
+                        "aborted repeated model tool-call loop"
+                    );
+                    ctx.sess.services.compatibility_diagnostics.record(
+                        codex_diagnostics::CompatibilityEventInput {
+                            phase: "model.tool_loop.aborted",
+                            outcome: CompatibilityOutcome::Failure,
+                            tool_name: Some(call.tool_name.name.as_str()),
+                            tool_namespace: call.tool_name.namespace.as_deref(),
+                            representation,
+                            duration: std::time::Duration::ZERO,
+                            input_bytes,
+                            output_bytes: MESSAGE.len(),
+                            error: Some("repeated identical tool call after recovery guidance"),
+                        },
+                    );
+                    return Err(CodexErr::Fatal(MESSAGE.to_string()));
+                }
+            }
 
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_future: InFlightFuture<'static> = Box::pin(

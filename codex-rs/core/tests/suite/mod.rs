@@ -71,6 +71,7 @@ mod extension_sandbox;
 mod external_auth;
 mod fork_thread;
 mod git_enrichment;
+mod glm_tool_loop;
 mod guardian_authorization;
 // Uses the same command-approval harness as guardian_review below.
 #[cfg(not(target_os = "windows"))]

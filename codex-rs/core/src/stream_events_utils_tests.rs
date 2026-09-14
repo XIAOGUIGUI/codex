@@ -309,6 +309,9 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
         step_context,
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime,
+        tool_call_loop_detector: Arc::new(crate::tools::tool_call_loop::ToolCallLoopDetector::new(
+            crate::tools::tool_call_loop::ToolCallLoopPolicy::Disabled,
+        )),
         cancellation_token: CancellationToken::new(),
     };
 
@@ -354,6 +357,9 @@ async fn file_mutation_history_limit_accepts_boundary_and_rejects_overflow_befor
         turn_context: Arc::clone(&turn_context),
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime: tool_runtime.clone(),
+        tool_call_loop_detector: Arc::new(crate::tools::tool_call_loop::ToolCallLoopDetector::new(
+            crate::tools::tool_call_loop::ToolCallLoopPolicy::Disabled,
+        )),
         cancellation_token: CancellationToken::new(),
     };
     let boundary_output = handle_output_item_done(

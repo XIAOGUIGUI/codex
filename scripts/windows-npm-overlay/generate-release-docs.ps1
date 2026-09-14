@@ -125,6 +125,7 @@ Render-Template (Join-Path $templateDirectory "README.template.md") (Join-Path $
 Render-Template (Join-Path $templateDirectory "操作说明.template.md") (Join-Path $docsDirectory "operation-guide.zh-CN.md") $values
 Render-Template (Join-Path $templateDirectory "验证提示词.template.md") (Join-Path $docsDirectory "validation-prompt.zh-CN.md") $values
 Render-Template (Join-Path $templateDirectory "日志反馈说明.template.md") (Join-Path $docsDirectory "diagnostics-guide.zh-CN.md") $values
+Render-Template (Join-Path $templateDirectory "代理工具循环防护.template.md") (Join-Path $docsDirectory "proxy-tool-loop-guide.zh-CN.md") $values
 
 if ($Mode -eq "Release") {
     Copy-Item -LiteralPath (Join-Path $docsDirectory "operation-guide.zh-CN.md") `

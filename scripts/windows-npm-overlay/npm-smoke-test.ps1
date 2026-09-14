@@ -141,6 +141,7 @@ try {
         "README.md",
         "docs\operation-guide.zh-CN.md",
         "docs\diagnostics-guide.zh-CN.md",
+        "docs\proxy-tool-loop-guide.zh-CN.md",
         "docs\validation-prompt.zh-CN.md"
     )) {
         $installedDocument = Join-Path $installedPatchDirectory $relativePath

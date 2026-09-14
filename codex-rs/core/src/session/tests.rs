@@ -12403,6 +12403,9 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         step_context: StepContext::for_test(Arc::clone(&tc)),
         turn_store: Arc::new(codex_extension_api::ExtensionData::new(tc.sub_id.clone())),
         tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
+        tool_call_loop_detector: Arc::new(crate::tools::tool_call_loop::ToolCallLoopDetector::new(
+            crate::tools::tool_call_loop::ToolCallLoopPolicy::Disabled,
+        )),
         cancellation_token: CancellationToken::new(),
     };
 

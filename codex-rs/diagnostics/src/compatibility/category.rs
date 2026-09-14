@@ -14,6 +14,11 @@ pub(super) fn classify(phase: &str, tool: Option<&str>, error: Option<&str>) -> 
             "provider.output.text_integrity",
             "Model output contained a text integrity signal",
         )
+    } else if phase.starts_with("model.tool_loop") {
+        classified(
+            "provider.output.tool_loop",
+            "Model repeated an identical tool call",
+        )
     } else if contains("split writable root") {
         classified(
             "windows.sandbox.split_roots",

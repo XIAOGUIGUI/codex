@@ -12,6 +12,7 @@ tarball、对应的 SHA-256 文件、最终中文操作说明、发布清单和�
 - `README.md` 和 `docs/operation-guide.zh-CN.md`
 - `docs/validation-prompt.zh-CN.md`
 - `docs/diagnostics-guide.zh-CN.md`
+- `docs/proxy-tool-loop-guide.zh-CN.md`（内网代理工具循环防护任务书）
 - `build-info.json` 和 `SHA256SUMS`
 - `codex.exe`、`apply_patch.exe` 以及安装/恢复命令入口
 
