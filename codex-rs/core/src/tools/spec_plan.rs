@@ -358,9 +358,10 @@ pub(crate) fn finalize_tool_router(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
     mut registry: ToolRegistry,
-    hosted_specs: Vec<ToolSpec>,
+    mut hosted_specs: Vec<ToolSpec>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> CodexResult<ToolRouter> {
+    restrict_explorer_tools(turn_context, &mut registry, &mut hosted_specs);
     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
     let tool_mode = effective_tool_mode(turn_context, model_info);
     let code_mode_enabled = matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly);
@@ -497,6 +498,38 @@ pub(crate) fn finalize_tool_router(
         tool_namespaces_info,
         &child_management_tools,
     ))
+}
+
+fn restrict_explorer_tools(
+    turn_context: &TurnContext,
+    registry: &mut ToolRegistry,
+    hosted_specs: &mut Vec<ToolSpec>,
+) {
+    if turn_context.session_source.get_agent_role().as_deref() != Some("explorer") {
+        return;
+    }
+
+    registry.retain(|tool| {
+        if tool.runtime.mcp_server_name() == Some("codegraph") {
+            return true;
+        }
+
+        let name = tool.runtime.tool_name().with_default_namespace();
+        name.is_default_namespace()
+            && matches!(
+                name.name.as_str(),
+                "read_file"
+                    | "grep_files"
+                    | "glob_files"
+                    | "list_mcp_resources"
+                    | "list_mcp_resource_templates"
+                    | "read_mcp_resource"
+                    | "view_image"
+                    | "current_time"
+                    | "get_context_remaining"
+            )
+    });
+    hosted_specs.clear();
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -675,7 +708,7 @@ fn required_child_management_tool_names(
     let (namespace, names): (_, &[&str]) = match turn_context.multi_agent_version {
         MultiAgentVersion::Disabled => return Vec::new(),
         MultiAgentVersion::V1 => (
-            Some(MULTI_AGENT_V1_NAMESPACE),
+            namespace_tools_enabled(turn_context).then_some(MULTI_AGENT_V1_NAMESPACE),
             &["send_input", "wait_agent", "resume_agent", "close_agent"],
         ),
         MultiAgentVersion::V2 => (
@@ -1332,63 +1365,96 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             let tool_namespace = namespace_tools_enabled(turn_context)
                 .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
                 .flatten();
+            let compatibility_namespace = match tool_namespace {
+                Some(_) => None,
+                None => turn_context.config.multi_agent_v2.tool_namespace.as_deref(),
+            };
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
                 turn_context.config.multi_agent_v2.hide_spawn_agent_metadata;
-            registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(
-                    SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
-                        available_models: turn_context.available_models.clone(),
-                        agent_type_description,
-                        expose_agent_type: !turn_context.config.agent_roles.is_empty(),
-                        hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
-                        expose_spawn_agent_model_overrides: turn_context
-                            .config
-                            .multi_agent_v2
-                            .expose_spawn_agent_model_overrides,
-                        multi_agent_version: turn_context.multi_agent_version,
-                        usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
-                    }),
-                    tool_namespace,
-                ),
+            register_multi_agent_tool(
+                registry,
+                &turn_context.dynamic_tools,
+                Arc::new(SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
+                    available_models: turn_context.available_models.clone(),
+                    agent_type_description,
+                    expose_agent_type: !turn_context.config.agent_roles.is_empty(),
+                    hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
+                    expose_spawn_agent_model_overrides: turn_context
+                        .config
+                        .multi_agent_v2
+                        .expose_spawn_agent_model_overrides,
+                    multi_agent_version: turn_context.multi_agent_version,
+                    usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
+                })),
+                tool_namespace,
+                compatibility_namespace,
                 exposure,
             );
-            registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(SendMessageHandlerV2, tool_namespace),
+            register_multi_agent_tool(
+                registry,
+                &turn_context.dynamic_tools,
+                Arc::new(SendMessageHandlerV2),
+                tool_namespace,
+                compatibility_namespace,
                 exposure,
             );
-            registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(FollowupTaskHandlerV2, tool_namespace),
+            register_multi_agent_tool(
+                registry,
+                &turn_context.dynamic_tools,
+                Arc::new(FollowupTaskHandlerV2),
+                tool_namespace,
+                compatibility_namespace,
                 exposure,
             );
             if turn_context.config.multi_agent_v2.wait_agent_enabled {
-                registry.register_trusted_with_exposure(
-                    multi_agent_v2_handler(
-                        WaitAgentHandlerV2::new(context.wait_agent_timeouts),
-                        tool_namespace,
-                    ),
+                register_multi_agent_tool(
+                    registry,
+                    &turn_context.dynamic_tools,
+                    Arc::new(WaitAgentHandlerV2::new(context.wait_agent_timeouts)),
+                    tool_namespace,
+                    compatibility_namespace,
                     exposure,
                 );
             }
-            registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(InterruptAgentHandler, tool_namespace),
+            register_multi_agent_tool(
+                registry,
+                &turn_context.dynamic_tools,
+                Arc::new(InterruptAgentHandler),
+                tool_namespace,
+                compatibility_namespace,
                 exposure,
             );
-            registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(ListAgentsHandlerV2, tool_namespace),
+            register_multi_agent_tool(
+                registry,
+                &turn_context.dynamic_tools,
+                Arc::new(ListAgentsHandlerV2),
+                tool_namespace,
+                compatibility_namespace,
                 exposure,
             );
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
-            let exposure = if search_tool_enabled(turn_context, context.model_info) {
+            let exposure = if namespace_tools_enabled(turn_context)
+                && search_tool_enabled(turn_context, context.model_info)
+            {
                 ToolExposure::Deferred
             } else {
                 ToolExposure::Direct
             };
-            registry.add_with_exposure(
-                SpawnAgentHandler::new(SpawnAgentToolOptions {
+            let tool_namespace =
+                namespace_tools_enabled(turn_context).then_some(MULTI_AGENT_V1_NAMESPACE);
+            let compatibility_namespace = if tool_namespace.is_some() {
+                None
+            } else {
+                Some(MULTI_AGENT_V1_NAMESPACE)
+            };
+            register_multi_agent_tool(
+                registry,
+                &turn_context.dynamic_tools,
+                Arc::new(SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
                     agent_type_description,
                     expose_agent_type: !turn_context.config.agent_roles.is_empty(),
@@ -1396,14 +1462,26 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                     expose_spawn_agent_model_overrides: true,
                     multi_agent_version: turn_context.multi_agent_version,
                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
-                }),
+                })),
+                tool_namespace,
+                compatibility_namespace,
                 exposure,
             );
-            registry.add_with_exposure(SendInputHandler, exposure);
-            registry.add_with_exposure(ResumeAgentHandler, exposure);
-            registry
-                .add_with_exposure(WaitAgentHandler::new(context.wait_agent_timeouts), exposure);
-            registry.add_with_exposure(CloseAgentHandler, exposure);
+            for handler in [
+                Arc::new(SendInputHandler) as Arc<dyn CoreToolRuntime>,
+                Arc::new(ResumeAgentHandler),
+                Arc::new(WaitAgentHandler::new(context.wait_agent_timeouts)),
+                Arc::new(CloseAgentHandler),
+            ] {
+                register_multi_agent_tool(
+                    registry,
+                    &turn_context.dynamic_tools,
+                    handler,
+                    tool_namespace,
+                    compatibility_namespace,
+                    exposure,
+                );
+            }
         }
     }
 }
@@ -1490,37 +1568,62 @@ fn append_extension_tool_executors(
     standalone_web_search_tool
 }
 
-fn multi_agent_v2_handler(
-    handler: impl CoreToolRuntime + 'static,
-    namespace: Option<&str>,
-) -> Arc<dyn CoreToolRuntime> {
-    match namespace {
-        Some(namespace) => Arc::new(MultiAgentV2NamespaceOverride {
-            handler: Arc::new(handler),
-            namespace: namespace.to_string(),
-        }),
-        None => Arc::new(handler),
-    }
-}
-
-struct MultiAgentV2NamespaceOverride {
+fn register_multi_agent_tool(
+    registry: &mut ToolRegistry,
+    dynamic_tools: &[DynamicToolSpec],
     handler: Arc<dyn CoreToolRuntime>,
-    namespace: String,
+    namespace: Option<&str>,
+    compatibility_namespace: Option<&str>,
+    exposure: ToolExposure,
+) {
+    if namespace.is_none() && has_default_dynamic_tool(dynamic_tools, &handler.tool_name().name) {
+        return;
+    }
+
+    let runtime = Arc::new(MultiAgentToolNameOverride {
+        handler,
+        namespace: namespace.map(str::to_string),
+    });
+    let canonical = runtime.tool_name();
+    let alias = ToolName::new(
+        compatibility_namespace.map(str::to_string),
+        canonical.name.clone(),
+    );
+    registry.register_trusted_with_exposure(runtime, exposure);
+    registry.register_alias(alias, canonical);
 }
 
-impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
+struct MultiAgentToolNameOverride {
+    handler: Arc<dyn CoreToolRuntime>,
+    namespace: Option<String>,
+}
+
+impl ToolExecutor<ToolInvocation> for MultiAgentToolNameOverride {
     fn tool_name(&self) -> ToolName {
-        ToolName::namespaced(self.namespace.clone(), self.handler.tool_name().name)
+        ToolName::new(self.namespace.clone(), self.handler.tool_name().name)
     }
 
     fn spec(&self) -> ToolSpec {
-        match self.handler.spec() {
-            ToolSpec::Function(tool) => ToolSpec::Namespace(ResponsesApiNamespace {
-                name: self.namespace.clone(),
-                description: MULTI_AGENT_V2_NAMESPACE_DESCRIPTION.to_string(),
-                tools: vec![ResponsesApiNamespaceTool::Function(tool)],
-            }),
-            spec => spec,
+        match (self.namespace.as_ref(), self.handler.spec()) {
+            (Some(namespace), ToolSpec::Function(tool)) => {
+                ToolSpec::Namespace(ResponsesApiNamespace {
+                    name: namespace.clone(),
+                    description: MULTI_AGENT_V2_NAMESPACE_DESCRIPTION.to_string(),
+                    tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+                })
+            }
+            (Some(namespace), ToolSpec::Namespace(mut spec)) => {
+                spec.name.clone_from(namespace);
+                ToolSpec::Namespace(spec)
+            }
+            (None, ToolSpec::Namespace(mut spec)) if spec.tools.len() == 1 => {
+                match spec.tools.pop() {
+                    Some(ResponsesApiNamespaceTool::Function(tool)) => ToolSpec::Function(tool),
+                    Some(ResponsesApiNamespaceTool::Custom(tool)) => ToolSpec::Freeform(tool),
+                    None => ToolSpec::Namespace(spec),
+                }
+            }
+            (_, spec) => spec,
         }
     }
 
@@ -1544,7 +1647,7 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
     }
 }
 
-impl CoreToolRuntime for MultiAgentV2NamespaceOverride {
+impl CoreToolRuntime for MultiAgentToolNameOverride {
     fn wait_until_ready<'a>(&'a self, session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
         self.handler.wait_until_ready(session)
     }

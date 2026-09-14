@@ -18,6 +18,8 @@ You can use `spawn_agent` to create a new agent, `followup_task` to give an exis
 Child agents can also spawn their own sub-agents.
 You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
 
+For broad codebase discovery, prefer an `explorer` agent with `fork_turns="none"`. It has a read-only tool set and returns a bounded evidence report, which keeps raw file reads out of the parent context. Trust its cited paths and symbols instead of repeating the same broad exploration in the parent.
+
 You will receive messages in the analysis channel in the form:
 ```
 Message Type: MESSAGE | FINAL_ANSWER
@@ -178,6 +180,10 @@ pub(crate) fn effective_multi_agent_mode(step_context: &StepContext) -> Option<M
     // of an effort-derived built-in policy.
     let multi_agent_mode = match mode_hint_text {
         Some(hint_text) => MultiAgentMode::Custom(hint_text.to_string()),
+        None if !turn_context.provider.info().is_openai() => catalog_mode
+            .and_then(|messages| messages.proactive.clone())
+            .map(MultiAgentMode::Custom)
+            .unwrap_or(MultiAgentMode::Proactive),
         None => match settings.effective_reasoning_effort() {
             Some(ReasoningEffort::Ultra) => catalog_mode
                 .and_then(|messages| messages.proactive.clone())

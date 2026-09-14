@@ -3092,6 +3092,134 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
 }
 
 #[tokio::test]
+async fn custom_provider_uses_flat_multi_agent_tools() {
+    for version in [MultiAgentVersion::V1, MultiAgentVersion::V2] {
+        let plan = probe(|turn| {
+            set_feature(turn, Feature::Collab, version == MultiAgentVersion::V1);
+            set_feature(
+                turn,
+                Feature::MultiAgentV2,
+                version == MultiAgentVersion::V2,
+            );
+            let provider = ModelProviderInfo {
+                name: "custom".to_string(),
+                base_url: Some("https://example.test/v1".to_string()),
+                ..ModelProviderInfo::default()
+            };
+            turn.provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
+            update_config(turn, |config| {
+                config.model_provider_id = "custom".to_string();
+                config.model_provider = provider;
+            });
+        })
+        .await;
+
+        plan.assert_visible_contains(&["spawn_agent"]);
+        plan.assert_registered_contains(&["spawn_agent"]);
+        plan.assert_visible_lacks(&[MULTI_AGENT_V1_NAMESPACE, MULTI_AGENT_V2_NAMESPACE]);
+        assert_eq!(
+            plan.exposure("spawn_agent"),
+            if version == MultiAgentVersion::V1 {
+                ToolExposure::Direct
+            } else {
+                ToolExposure::DirectModelOnly
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn custom_provider_preserves_existing_flat_dynamic_tool() {
+    let plan = probe_with(
+        |turn| {
+            set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+            let provider = ModelProviderInfo {
+                name: "custom".to_string(),
+                base_url: Some("https://example.test/v1".to_string()),
+                ..ModelProviderInfo::default()
+            };
+            turn.provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
+            update_config(turn, |config| {
+                config.model_provider_id = "custom".to_string();
+                config.model_provider = provider;
+            });
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                /*namespace*/ None,
+                "spawn_agent",
+                /*defer_loading*/ false,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    let ToolSpec::Function(spec) = plan.visible_spec("spawn_agent") else {
+        panic!("spawn_agent should remain a function tool");
+    };
+    assert_eq!(spec.description, "spawn_agent dynamic tool");
+}
+
+#[tokio::test]
+async fn explorer_role_has_only_read_only_discovery_tools() {
+    let plan = probe_with(
+        |turn| {
+            set_features(turn, &[Feature::ShellTool, Feature::MultiAgentV2]);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).apply_patch_tool_type =
+                    Some(ApplyPatchToolType::Function);
+            });
+            turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::new(),
+                depth: 1,
+                agent_path: Some(AgentPath::try_from("/root/explore").expect("valid agent path")),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            });
+        },
+        ToolPlanInputs {
+            tool_runtimes: vec![mcp_runtime(
+                "codegraph",
+                "codegraph",
+                "context",
+                ToolExposure::Direct,
+            )],
+            dynamic_tools: vec![dynamic_tool(
+                /*namespace*/ None,
+                "mutable_external_tool",
+                /*defer_loading*/ false,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&["codegraph"]);
+    plan.assert_visible_lacks(&[
+        "exec_command",
+        "apply_patch",
+        "edit_file",
+        "write_file",
+        "mutable_external_tool",
+        MULTI_AGENT_V2_NAMESPACE,
+        "spawn_agent",
+    ]);
+    plan.assert_registered_lacks(&[
+        "exec_command",
+        "apply_patch",
+        "edit_file",
+        "write_file",
+        "mutable_external_tool",
+        "spawn_agent",
+    ]);
+    assert!(!plan.can_manage_children);
+
+    #[cfg(target_os = "windows")]
+    plan.assert_visible_contains(&["read_file", "grep_files", "glob_files"]);
+}
+
+#[tokio::test]
 async fn multi_agent_v2_namespace_is_supported_by_bedrock_provider() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);

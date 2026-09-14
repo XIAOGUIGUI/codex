@@ -1798,6 +1798,7 @@ impl ThreadManagerState {
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
+        let dynamic_tools = self.dynamic_tools_for_child(parent_thread_id).await;
         let options = StartThreadOptions {
             history_mode,
             session_source: Some(session_source),
@@ -1805,6 +1806,7 @@ impl ThreadManagerState {
             metrics_service_name,
             environments,
             client_mcp_extensions,
+            dynamic_tools,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -1835,6 +1837,7 @@ impl ThreadManagerState {
             Some(client_mcp_extensions) => client_mcp_extensions,
             None => self.client_mcp_extensions_for_child(parent_thread_id).await,
         };
+        let dynamic_tools = self.dynamic_tools_for_child(parent_thread_id).await;
         let thread_source = initial_history.get_resumed_thread_source();
         let environments = environment_selections.or_else(|| {
             inherited_environments
@@ -1847,6 +1850,7 @@ impl ThreadManagerState {
             thread_source,
             environments,
             client_mcp_extensions,
+            dynamic_tools,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -1874,6 +1878,7 @@ impl ThreadManagerState {
         thread_extension_init: ExtensionDataInit,
     ) -> CodexResult<NewThread> {
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
+        let dynamic_tools = self.dynamic_tools_for_child(parent_thread_id).await;
         let options = StartThreadOptions {
             initial_history,
             history_mode,
@@ -1882,6 +1887,7 @@ impl ThreadManagerState {
             environments,
             thread_extension_init,
             client_mcp_extensions,
+            dynamic_tools,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -1904,6 +1910,19 @@ impl ThreadManagerState {
             .await
             .map(|parent| parent.session.services.client_mcp_extensions.clone())
             .unwrap_or_default()
+    }
+
+    async fn dynamic_tools_for_child(
+        &self,
+        parent_thread_id: Option<ThreadId>,
+    ) -> Vec<codex_protocol::dynamic_tools::DynamicToolSpec> {
+        let Some(parent_thread_id) = parent_thread_id else {
+            return Vec::new();
+        };
+        match self.get_thread(parent_thread_id).await {
+            Ok(parent) => parent.session.dynamic_tools().await,
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Spawn a new thread with optional history and register it with the manager.

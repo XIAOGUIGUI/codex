@@ -30,6 +30,7 @@ base_url = "http://localhost:11434/v1"
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        namespace_tools: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -65,6 +66,7 @@ query_params = { api-version = "2025-04-01-preview" }
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        namespace_tools: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -80,6 +82,7 @@ env_key = "API_KEY"
 http_headers = { "X-Example-Header" = "example-value" }
 env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 supports_standalone_web_search = true
+namespace_tools = true
         "#;
     let expected_provider = ModelProviderInfo {
         name: "Example".into(),
@@ -104,6 +107,7 @@ supports_standalone_web_search = true
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: true,
+        namespace_tools: Some(true),
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -290,6 +294,7 @@ fn test_create_amazon_bedrock_provider() {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            namespace_tools: Some(true),
         }
     );
 }

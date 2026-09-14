@@ -360,6 +360,10 @@ impl ModelProvider for ConfiguredModelProvider {
         };
 
         ProviderCapabilities {
+            namespace_tools: self
+                .info
+                .namespace_tools
+                .unwrap_or_else(|| self.info.is_openai()),
             remote_compaction,
             ..ProviderCapabilities::default()
         }
@@ -590,7 +594,38 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            namespace_tools: None,
         }
+    }
+
+    #[test]
+    fn configured_provider_defaults_namespace_tools_by_provider_kind() {
+        let custom = create_model_provider(
+            ModelProviderInfo {
+                name: "custom".to_string(),
+                base_url: Some("https://example.test/v1".to_string()),
+                ..ModelProviderInfo::default()
+            },
+            /*auth_manager*/ None,
+        );
+        assert!(!custom.capabilities().namespace_tools);
+
+        let opted_in = create_model_provider(
+            ModelProviderInfo {
+                name: "custom".to_string(),
+                base_url: Some("https://example.test/v1".to_string()),
+                namespace_tools: Some(true),
+                ..ModelProviderInfo::default()
+            },
+            /*auth_manager*/ None,
+        );
+        assert!(opted_in.capabilities().namespace_tools);
+
+        let openai = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+        assert!(openai.capabilities().namespace_tools);
     }
 
     fn remote_model(slug: &str) -> ModelInfo {

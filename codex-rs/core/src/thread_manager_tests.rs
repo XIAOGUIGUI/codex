@@ -21,6 +21,8 @@ use codex_protocol::ResponseItemId;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
@@ -297,6 +299,70 @@ async fn child_session_inherits_client_mcp_extensions() {
             ),
         ]))
     );
+}
+
+#[tokio::test]
+async fn child_session_inherits_dynamic_tools() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let expected = vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: "workspace_lookup".to_string(),
+        description: "Look up workspace metadata".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+        defer_loading: false,
+    })];
+    let parent = manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: expected.clone(),
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await
+        .expect("start parent thread");
+    let child = parent
+        .thread
+        .session
+        .services
+        .agent_control
+        .spawn_agent_with_metadata(
+            config,
+            vec![UserInput::Text {
+                text: "inspect the workspace".to_string(),
+                text_elements: Vec::new(),
+            }],
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: parent.thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            SpawnAgentOptions {
+                parent_thread_id: Some(parent.thread_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("spawn child agent");
+
+    let child_thread = manager
+        .get_thread(child.thread_id)
+        .await
+        .expect("child thread should remain registered");
+    assert_eq!(child_thread.session.dynamic_tools().await, expected);
+
+    let report = manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+    assert_eq!(report.completed.len(), 2);
 }
 
 struct FakeAgentGraphStore {
