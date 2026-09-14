@@ -122,13 +122,13 @@ $values = @{
 
 $docsDirectory = Join-Path $OutputDirectory "docs"
 Render-Template (Join-Path $templateDirectory "README.template.md") (Join-Path $OutputDirectory "README.md") $values
-Render-Template (Join-Path $templateDirectory "操作说明.template.md") (Join-Path $docsDirectory "操作说明.md") $values
-Render-Template (Join-Path $templateDirectory "验证提示词.template.md") (Join-Path $docsDirectory "验证提示词.md") $values
-Render-Template (Join-Path $templateDirectory "日志反馈说明.template.md") (Join-Path $docsDirectory "日志反馈说明.md") $values
+Render-Template (Join-Path $templateDirectory "操作说明.template.md") (Join-Path $docsDirectory "operation-guide.zh-CN.md") $values
+Render-Template (Join-Path $templateDirectory "验证提示词.template.md") (Join-Path $docsDirectory "validation-prompt.zh-CN.md") $values
+Render-Template (Join-Path $templateDirectory "日志反馈说明.template.md") (Join-Path $docsDirectory "diagnostics-guide.zh-CN.md") $values
 
 if ($Mode -eq "Release") {
-    Copy-Item -LiteralPath (Join-Path $docsDirectory "操作说明.md") `
-        -Destination (Join-Path $OutputDirectory "操作说明-$PackageVersion.md")
+    Copy-Item -LiteralPath (Join-Path $docsDirectory "operation-guide.zh-CN.md") `
+        -Destination (Join-Path $OutputDirectory "operation-guide-$PackageVersion.zh-CN.md")
     [IO.File]::WriteAllText(
         (Join-Path $OutputDirectory "$tarballName.sha256"),
         "$tarballSha256  $tarballName`n",

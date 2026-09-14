@@ -258,13 +258,17 @@ jobs:
                   "bin/restore.js",
                   "build-info.json",
                   "codex.exe",
-                  "docs/操作说明.md",
-                  "docs/日志反馈说明.md",
-                  "docs/验证提示词.md",
+                  "docs/diagnostics-guide.zh-CN.md",
+                  "docs/operation-guide.zh-CN.md",
+                  "docs/validation-prompt.zh-CN.md",
                   "install.ps1",
                   "package.json",
                   "restore.ps1"
               ) | Sort-Object
+              $nonAsciiFiles = @($actualFiles | Where-Object { $_ -match '[^\x00-\x7F]' })
+              if ($nonAsciiFiles.Count -ne 0) {
+                  throw "npm package contains non-ASCII paths that may be garbled by Windows extractors: $($nonAsciiFiles -join ', ')"
+              }
               if (($actualFiles -join "`n") -ne ($expectedFiles -join "`n")) {
                   throw "Unexpected npm package contents.`nExpected:`n$($expectedFiles -join "`n")`nActual:`n$($actualFiles -join "`n")"
               }
@@ -320,25 +324,32 @@ jobs:
           独立 test job 也必须通过，publish job 才能运行。
           "@
           [IO.File]::WriteAllText(
-              (Join-Path $releaseDirectory "验证报告-$packageVersion.md"),
+              (Join-Path $releaseDirectory "validation-report-$packageVersion.zh-CN.md"),
               $report,
               [Text.UTF8Encoding]::new($false)
           )
           $expectedReleaseFiles = @(
               "chenronggui-codex-win-patch-$packageVersion.tgz",
               "chenronggui-codex-win-patch-$packageVersion.tgz.sha256",
-              "docs\操作说明.md",
-              "docs\日志反馈说明.md",
-              "docs\验证提示词.md",
+              "docs\diagnostics-guide.zh-CN.md",
+              "docs\operation-guide.zh-CN.md",
+              "docs\validation-prompt.zh-CN.md",
               "README.md",
               "release-manifest.json",
-              "操作说明-$packageVersion.md",
-              "验证报告-$packageVersion.md"
+              "operation-guide-$packageVersion.zh-CN.md",
+              "validation-report-$packageVersion.zh-CN.md"
           )
           foreach ($relativePath in $expectedReleaseFiles) {
-              if (-not (Test-Path -LiteralPath (Join-Path $releaseDirectory $relativePath) -PathType Leaf)) {
+              $releasePath = Join-Path $releaseDirectory $relativePath
+              if (-not (Test-Path -LiteralPath $releasePath -PathType Leaf)) {
                   throw "Release materials are missing $relativePath."
               }
+          }
+          $nonAsciiReleaseNames = @(Get-ChildItem -LiteralPath $releaseDirectory -Recurse | Where-Object {
+              $_.Name -match '[^\x00-\x7F]'
+          } | ForEach-Object { $_.FullName })
+          if ($nonAsciiReleaseNames.Count -ne 0) {
+              throw "Release materials contain non-ASCII names that may be garbled by Windows extractors: $($nonAsciiReleaseNames -join ', ')"
           }
           "## Windows npm 补丁 $packageVersion" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           "PACKAGE_VALIDATION_PASS：npm 包与 Windows 冒烟测试均已通过。" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
