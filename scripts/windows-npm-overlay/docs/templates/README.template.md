@@ -15,6 +15,7 @@ codex --version
 - `docs/operation-guide.zh-CN.md`
 - `docs/validation-prompt.zh-CN.md`
 - `docs/diagnostics-guide.zh-CN.md`
+- `docs/proxy-tool-loop-guide.zh-CN.md`（交给内网代理开发 AI）
 
 构建 commit：`{{COMMIT}}`
 

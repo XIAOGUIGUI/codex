@@ -59,6 +59,8 @@ use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::spec_plan::build_tool_router;
 use crate::tools::spec_plan::tool_suggest_enabled;
+use crate::tools::tool_call_loop::ToolCallLoopDetector;
+use crate::tools::tool_call_loop::ToolCallLoopPolicy;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::error_or_panic;
@@ -312,6 +314,12 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh turn input in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
 
+    let tool_call_loop_policy = if turn_context.provider.info().supports_codex_backend_routes() {
+        ToolCallLoopPolicy::Disabled
+    } else {
+        ToolCallLoopPolicy::ProtectToolCalls
+    };
+    let tool_call_loop_detector = Arc::new(ToolCallLoopDetector::new(tool_call_loop_policy));
     let mut next_step_context = Some(first_step_context);
     loop {
         // Note that pending_input would be something like a message the user
@@ -397,6 +405,7 @@ pub(crate) async fn run_turn(
                 Arc::clone(&sess),
                 Arc::clone(&step_context),
                 Arc::clone(&turn_context.extension_data),
+                Arc::clone(&tool_call_loop_detector),
                 Arc::clone(&turn_diff_tracker),
                 &mut client_session,
                 &responses_metadata,
@@ -1387,6 +1396,7 @@ async fn run_sampling_request(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
+    tool_call_loop_detector: Arc<ToolCallLoopDetector>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
@@ -1437,6 +1447,7 @@ async fn run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&step_context),
             Arc::clone(&turn_store),
+            Arc::clone(&tool_call_loop_detector),
             client_session,
             responses_metadata,
             Arc::clone(&turn_diff_tracker),
@@ -2269,6 +2280,7 @@ async fn try_run_sampling_request(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
+    tool_call_loop_detector: Arc<ToolCallLoopDetector>,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
     turn_diff_tracker: SharedTurnDiffTracker,
@@ -2446,6 +2458,7 @@ async fn try_run_sampling_request(
                     turn_context: turn_context.clone(),
                     turn_store: Arc::clone(&turn_store),
                     tool_runtime: tool_runtime.clone(),
+                    tool_call_loop_detector: Arc::clone(&tool_call_loop_detector),
                     cancellation_token: cancellation_token.child_token(),
                 };
 

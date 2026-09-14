@@ -80,6 +80,14 @@ jobs:
           just test -p codex-core file_update_mode_follows_preserve_line_endings_feature
           exit $LASTEXITCODE
 
+      - name: Test third-party tool-call loop protection
+        shell: pwsh
+        run: |
+          just test -p codex-core tool_call_loop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-core third_party_model_receives_recovery_error_on_third_identical_tool_call
+          exit $LASTEXITCODE
+
       - name: Test compatibility diagnostics
         shell: pwsh
         run: |
@@ -260,6 +268,7 @@ jobs:
                   "codex.exe",
                   "docs/diagnostics-guide.zh-CN.md",
                   "docs/operation-guide.zh-CN.md",
+                  "docs/proxy-tool-loop-guide.zh-CN.md",
                   "docs/validation-prompt.zh-CN.md",
                   "install.ps1",
                   "package.json",
@@ -318,6 +327,7 @@ jobs:
           - 包验证状态：PACKAGE_VALIDATION_PASS
           - 原生 apply_patch 冒烟测试：PASS
           - npm 隔离安装、恢复、哈希、版本及安全测试：PASS
+          - 第三方模型重复工具调用熔断测试：PASS
           - 构建 commit：$env:GITHUB_SHA
           - 流水线：https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
 
@@ -333,6 +343,7 @@ jobs:
               "chenronggui-codex-win-patch-$packageVersion.tgz.sha256",
               "docs\diagnostics-guide.zh-CN.md",
               "docs\operation-guide.zh-CN.md",
+              "docs\proxy-tool-loop-guide.zh-CN.md",
               "docs\validation-prompt.zh-CN.md",
               "README.md",
               "release-manifest.json",
