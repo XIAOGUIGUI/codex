@@ -478,13 +478,14 @@ jobs:
           $manifest = Get-Content -LiteralPath "dist/windows-overlay/release-manifest.json" -Raw | ConvertFrom-Json
           $package = "@chenronggui/codex-win-patch@$env:PACKAGE_VERSION"
           $dist = $null
-          for ($attempt = 1; $attempt -le 6; $attempt++) {
-              $distText = npm view $package dist --json 2>$null
+          for ($attempt = 1; $attempt -le 30; $attempt++) {
+              $distText = npm view $package dist --json --prefer-online 2>$null
               if ($LASTEXITCODE -eq 0) {
                   $dist = $distText | ConvertFrom-Json
                   break
               }
-              Start-Sleep -Seconds 5
+              Write-Host "Waiting for npm registry propagation ($attempt/30)..."
+              Start-Sleep -Seconds 10
           }
           if ($null -eq $dist) {
               throw "Published package did not become visible in the npm registry."
