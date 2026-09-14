@@ -39,6 +39,36 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
 
 impl CoreToolRuntime for TestHandler {}
 
+#[test]
+fn dispatch_alias_preserves_exact_runtime_priority() {
+    let canonical_name = codex_tools::ToolName::plain("spawn_agent");
+    let alias_name = codex_tools::ToolName::namespaced("collaboration", "spawn_agent");
+    let canonical = Arc::new(TestHandler {
+        tool_name: canonical_name.clone(),
+    });
+    let exact_alias = Arc::new(TestHandler {
+        tool_name: alias_name.clone(),
+    });
+    let mut registry = ToolRegistry::default();
+    registry.register_trusted(canonical.clone());
+    registry.register_alias(alias_name.clone(), canonical_name);
+
+    let resolved_alias = registry.tool(&alias_name).expect("alias should resolve");
+    assert!(Arc::ptr_eq(
+        &resolved_alias,
+        &(canonical as Arc<dyn CoreToolRuntime>)
+    ));
+
+    registry.register_trusted(exact_alias.clone());
+    let resolved_exact = registry
+        .tool(&alias_name)
+        .expect("exact runtime should resolve");
+    assert!(Arc::ptr_eq(
+        &resolved_exact,
+        &(exact_alias as Arc<dyn CoreToolRuntime>)
+    ));
+}
+
 struct ReadinessTestHandler {
     handler: TestHandler,
     readiness_waits: Arc<AtomicUsize>,

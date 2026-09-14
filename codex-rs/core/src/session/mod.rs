@@ -229,6 +229,9 @@ mod mcp_prewarm;
 mod mcp_refresh;
 mod mcp_runtime;
 pub(crate) mod multi_agents;
+#[cfg(test)]
+#[path = "multi_agents_tests.rs"]
+mod multi_agents_tests;
 mod realtime_history;
 mod review;
 mod rollout_budget;
@@ -1852,6 +1855,15 @@ impl Session {
         state
             .session_configuration
             .original_config_do_not_use
+            .clone()
+    }
+
+    pub(crate) async fn dynamic_tools(&self) -> Vec<DynamicToolSpec> {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .dynamic_tools
             .clone()
     }
 

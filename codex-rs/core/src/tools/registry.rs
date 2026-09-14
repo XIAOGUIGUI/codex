@@ -296,6 +296,7 @@ pub(crate) struct RegisteredTool {
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: IndexMap<ToolName, RegisteredTool>,
+    aliases: IndexMap<ToolName, ToolName>,
     first_collision: Option<ToolName>,
 }
 
@@ -401,6 +402,16 @@ impl ToolRegistry {
         self.first_collision.get_or_insert(tool_name);
     }
 
+    /// Registers a dispatch-only compatibility name without changing the
+    /// model-visible tool surface. An exact runtime registration always wins.
+    pub(crate) fn register_alias(&mut self, alias: ToolName, canonical: ToolName) {
+        let alias = alias.with_default_namespace();
+        let canonical = canonical.with_default_namespace();
+        if alias != canonical {
+            self.aliases.insert(alias, canonical);
+        }
+    }
+
     pub(crate) fn first_collision(&self) -> Option<&ToolName> {
         self.first_collision.as_ref()
     }
@@ -417,6 +428,12 @@ impl ToolRegistry {
 
     pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = &mut RegisteredTool> {
         self.tools.values_mut()
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&RegisteredTool) -> bool) {
+        self.tools.retain(|_, tool| keep(tool));
+        self.aliases
+            .retain(|_, canonical| self.tools.contains_key(canonical));
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
@@ -467,8 +484,13 @@ impl ToolRegistry {
     }
 
     pub(crate) fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
+        let name = name.clone().with_default_namespace();
+        if let Some(tool) = self.tools.get(&name) {
+            return Some(Arc::clone(&tool.runtime));
+        }
+        let canonical = self.aliases.get(&name).unwrap_or(&name);
         self.tools
-            .get(&name.clone().with_default_namespace())
+            .get(canonical)
             .map(|tool| Arc::clone(&tool.runtime))
     }
 
