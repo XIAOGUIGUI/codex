@@ -14,6 +14,7 @@ use super::CompatibilityDiagnosticsContext;
 use super::CompatibilityEventInput;
 use super::CompatibilityOutcome;
 use super::CompatibilityReportOptions;
+use super::TextIntegrityEventInput;
 use super::ToolRepresentation;
 use super::build_compatibility_report;
 use super::classify;
@@ -141,4 +142,57 @@ fn report_contains_only_bounded_structured_failure_data() {
     assert!(!samples.contains("INTERNAL_ARGUMENT"));
     assert!(samples.contains("external:"));
     assert!(samples.contains("file.apply_patch.context_mismatch"));
+}
+
+#[test]
+fn text_integrity_event_records_only_fingerprint_lengths_and_flags() {
+    let temp = TempDir::new().unwrap();
+    let directory = AbsolutePathBuf::try_from(temp.path().to_path_buf()).unwrap();
+    let recorder = CompatibilityDiagnostics::start(
+        &CompatibilityDiagnosticsConfig {
+            enabled: true,
+            directory: Some(directory),
+            retention_days: Some(30),
+            max_total_mib: Some(1),
+        },
+        CompatibilityDiagnosticsContext {
+            app_version: "0.153.4".to_string(),
+            build_commit: Some("test".to_string()),
+            provider: "third-party".to_string(),
+            model: "test-model".to_string(),
+            session_id: "session-secret".to_string(),
+        },
+    )
+    .unwrap();
+    let secret_text = "INTERNAL_SECRET andтобы";
+    let analysis = recorder.record_text_integrity(TextIntegrityEventInput {
+        phase: "model.text_integrity.assistant.completed",
+        outcome: CompatibilityOutcome::Failure,
+        tool_name: None,
+        tool_namespace: None,
+        representation: ToolRepresentation::None,
+        text: secret_text,
+    });
+    drop(recorder);
+    std::thread::sleep(Duration::from_millis(100));
+
+    let event_path = std::fs::read_dir(temp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .expect("event log");
+    let mut event = String::new();
+    File::open(event_path)
+        .unwrap()
+        .read_to_string(&mut event)
+        .unwrap();
+
+    assert!(!event.contains(secret_text));
+    assert_eq!(analysis.byte_count, secret_text.len());
+    assert!(event.contains("\"text_fingerprint\":\""));
+    assert!(event.contains("mixed_alphabetic_scripts"));
+    assert!(event.contains("provider.output.text_integrity"));
 }

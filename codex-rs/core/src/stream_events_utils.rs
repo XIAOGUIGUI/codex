@@ -16,6 +16,9 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::tool_log_payload;
+use codex_diagnostics::CompatibilityOutcome;
+use codex_diagnostics::TextIntegrityEventInput;
+use codex_diagnostics::ToolRepresentation;
 use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
@@ -298,6 +301,21 @@ pub(crate) async fn handle_output_item_done(
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
+            if ctx.sess.services.compatibility_diagnostics.is_enabled()
+                && let crate::tools::context::ToolPayload::Function { arguments } = &call.payload
+            {
+                ctx.sess
+                    .services
+                    .compatibility_diagnostics
+                    .record_text_integrity(TextIntegrityEventInput {
+                        phase: "model.text_integrity.tool_arguments.completed",
+                        outcome: CompatibilityOutcome::Failure,
+                        tool_name: Some(call.tool_name.name.as_str()),
+                        tool_namespace: None,
+                        representation: ToolRepresentation::Function,
+                        text: arguments,
+                    });
+            }
             if let (Some(limit), crate::tools::context::ToolPayload::Function { arguments }) = (
                 ctx.tool_runtime.model_argument_bytes_limit(&call.tool_name),
                 &call.payload,
@@ -352,6 +370,21 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
+            if ctx.sess.services.compatibility_diagnostics.is_enabled()
+                && let Some(text) = raw_assistant_output_text_from_item(&item)
+            {
+                ctx.sess
+                    .services
+                    .compatibility_diagnostics
+                    .record_text_integrity(TextIntegrityEventInput {
+                        phase: "model.text_integrity.assistant.completed",
+                        outcome: CompatibilityOutcome::Failure,
+                        tool_name: None,
+                        tool_namespace: None,
+                        representation: ToolRepresentation::None,
+                        text: &text,
+                    });
+            }
             let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
                 TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),

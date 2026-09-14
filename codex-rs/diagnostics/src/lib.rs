@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 mod compatibility;
+mod text_integrity;
 
 pub use compatibility::CompatibilityDiagnostics;
 pub use compatibility::CompatibilityDiagnosticsConfig;
@@ -13,10 +14,14 @@ pub use compatibility::CompatibilityEventInput;
 pub use compatibility::CompatibilityOutcome;
 pub use compatibility::CompatibilityReportOptions;
 pub use compatibility::CompatibilityReportSummary;
+pub use compatibility::TextIntegrityEventInput;
 pub use compatibility::ToolRepresentation;
 pub use compatibility::build_compatibility_report;
 pub use compatibility::compatibility_diagnostics_status;
 pub use compatibility::sha256_file;
+pub use text_integrity::TextIntegrityAnalysis;
+pub use text_integrity::TextIntegrityFlag;
+pub use text_integrity::analyze_text_integrity;
 
 static GAUGES: Mutex<Vec<&'static Gauge>> = Mutex::new(Vec::new());
 
