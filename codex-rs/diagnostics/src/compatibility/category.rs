@@ -9,7 +9,12 @@ pub(super) fn classify(phase: &str, tool: Option<&str>, error: Option<&str>) -> 
     };
     let error = error.to_ascii_lowercase();
     let contains = |needle: &str| error.contains(needle);
-    if contains("split writable root") {
+    if phase.starts_with("model.text_integrity") {
+        classified(
+            "provider.output.text_integrity",
+            "Model output contained a text integrity signal",
+        )
+    } else if contains("split writable root") {
         classified(
             "windows.sandbox.split_roots",
             "Windows sandbox rejected split writable roots",

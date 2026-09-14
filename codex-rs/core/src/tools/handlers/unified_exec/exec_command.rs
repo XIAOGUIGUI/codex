@@ -31,6 +31,9 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::generate_chunk_id;
+use codex_diagnostics::CompatibilityOutcome;
+use codex_diagnostics::TextIntegrityEventInput;
+use codex_diagnostics::ToolRepresentation;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
@@ -245,6 +248,28 @@ impl ExecCommandHandler {
             return Err(FunctionCallError::RespondToModel(
                 "TTY execution is disabled by config; omit `tty` or set it to false.".to_string(),
             ));
+        }
+        let text_integrity = session
+            .services
+            .compatibility_diagnostics
+            .record_text_integrity(TextIntegrityEventInput {
+                phase: "model.text_integrity.exec_command.validated",
+                outcome: CompatibilityOutcome::Rejected,
+                tool_name: Some("exec_command"),
+                tool_namespace: None,
+                representation: ToolRepresentation::Function,
+                text: &args.cmd,
+            });
+        if text_integrity.is_suspicious() {
+            let flags = text_integrity
+                .flags
+                .iter()
+                .map(|flag| flag.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(FunctionCallError::RespondToModel(format!(
+                "exec_command rejected before execution because the model-generated command contains text-integrity signals ({flags}); regenerate it from verified source text instead of reusing the corrupted output"
+            )));
         }
         let sandbox_permissions =
             resolve_sandbox_permissions(args.sandbox_permissions, args.justification.as_deref())?;

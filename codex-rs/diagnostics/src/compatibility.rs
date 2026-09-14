@@ -26,6 +26,9 @@ use sha2::Sha256;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
+use crate::TextIntegrityAnalysis;
+use crate::analyze_text_integrity;
+
 mod category;
 mod known_issues;
 
@@ -137,6 +140,17 @@ pub struct CompatibilityEventInput<'a> {
     pub error: Option<&'a str>,
 }
 
+/// Privacy-safe text observation. The recorder stores only length, a session-salted fingerprint,
+/// and anomaly flags.
+pub struct TextIntegrityEventInput<'a> {
+    pub phase: &'a str,
+    pub outcome: CompatibilityOutcome,
+    pub tool_name: Option<&'a str>,
+    pub tool_namespace: Option<&'a str>,
+    pub representation: ToolRepresentation,
+    pub text: &'a str,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CompatibilityEvent {
@@ -159,6 +173,12 @@ struct CompatibilityEvent {
     duration_ms: u64,
     input_bytes: usize,
     output_bytes: usize,
+    #[serde(default)]
+    text_fingerprint: Option<String>,
+    #[serde(default)]
+    text_char_count: Option<usize>,
+    #[serde(default)]
+    integrity_flags: Vec<String>,
     error_fingerprint: Option<String>,
     error_summary: Option<String>,
     resident_memory_bytes: Option<u64>,
@@ -241,6 +261,50 @@ impl CompatibilityDiagnostics {
     }
 
     pub fn record(&self, input: CompatibilityEventInput<'_>) {
+        self.record_inner(input, None);
+    }
+
+    pub fn record_text_integrity(
+        &self,
+        input: TextIntegrityEventInput<'_>,
+    ) -> TextIntegrityAnalysis {
+        let analysis = analyze_text_integrity(input.text);
+        let text_fingerprint = self
+            .inner
+            .as_ref()
+            .map(|inner| salted_fingerprint(&inner.context.session_id, input.text));
+        let error = analysis
+            .is_suspicious()
+            .then_some("model output text integrity signal");
+        let outcome = if analysis.is_suspicious() {
+            input.outcome
+        } else {
+            CompatibilityOutcome::Success
+        };
+        self.record_inner(
+            CompatibilityEventInput {
+                phase: input.phase,
+                outcome,
+                tool_name: input.tool_name,
+                tool_namespace: input.tool_namespace,
+                representation: input.representation,
+                duration: Duration::ZERO,
+                input_bytes: input.text.len(),
+                output_bytes: 0,
+                error,
+            },
+            text_fingerprint
+                .as_deref()
+                .map(|fingerprint| (&analysis, fingerprint)),
+        );
+        analysis
+    }
+
+    fn record_inner(
+        &self,
+        input: CompatibilityEventInput<'_>,
+        text_integrity: Option<(&TextIntegrityAnalysis, &str)>,
+    ) {
         let Some(inner) = &self.inner else {
             return;
         };
@@ -277,6 +341,15 @@ impl CompatibilityDiagnostics {
             duration_ms: u64::try_from(input.duration.as_millis()).unwrap_or(u64::MAX),
             input_bytes: input.input_bytes,
             output_bytes: input.output_bytes,
+            text_fingerprint: text_integrity.map(|(_, fingerprint)| fingerprint.to_string()),
+            text_char_count: text_integrity.map(|(analysis, _)| analysis.char_count),
+            integrity_flags: text_integrity.map_or_else(Vec::new, |(analysis, _)| {
+                analysis
+                    .flags
+                    .iter()
+                    .map(|flag| flag.as_str().to_string())
+                    .collect()
+            }),
             error_fingerprint: error.map(fingerprint),
             error_summary: error.map(|_| category.summary.to_string()),
             resident_memory_bytes: snapshot.resident_memory_bytes,
@@ -303,6 +376,14 @@ fn bounded(value: &str, max_bytes: usize) -> String {
 
 fn fingerprint(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+fn salted_fingerprint(salt: &str, value: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(salt.as_bytes());
+    digest.update([0]);
+    digest.update(value.as_bytes());
+    format!("{:x}", digest.finalize())
 }
 
 fn safe_tool_name(value: &str) -> String {
@@ -382,6 +463,9 @@ fn writer_loop(
                     duration_ms: 0,
                     input_bytes: 0,
                     output_bytes: 0,
+                    text_fingerprint: None,
+                    text_char_count: None,
+                    integrity_flags: Vec::new(),
                     error_fingerprint: None,
                     error_summary: None,
                     resident_memory_bytes: snapshot.resident_memory_bytes,
