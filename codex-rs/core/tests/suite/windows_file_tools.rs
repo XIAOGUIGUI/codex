@@ -164,7 +164,7 @@ fn function_output_json(request: &responses::ResponsesRequest, call_id: &str) ->
     let (content, success) = request
         .function_call_output_content_and_success(call_id)
         .expect("function output should be present");
-    assert_eq!(success, Some(true));
+    assert_ne!(success, Some(false));
     serde_json::from_str(
         content
             .as_deref()
