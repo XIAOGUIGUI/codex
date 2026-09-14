@@ -1,6 +1,9 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_diagnostics::CompatibilityEventInput;
+use codex_diagnostics::CompatibilityOutcome;
+use codex_diagnostics::ToolRepresentation;
 use codex_protocol::items::CommandExecutionItem;
 use codex_protocol::items::CommandExecutionStatus;
 use codex_protocol::items::TurnItem;
@@ -14,7 +17,9 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
+use crate::tools::handlers::file_tools_read::ReadFileArgs;
 use crate::tools::handlers::file_tools_read::read_file;
+use crate::tools::handlers::file_tools_read_history::ReadHistory;
 use crate::tools::handlers::file_tools_search::glob_files;
 use crate::tools::handlers::file_tools_search::grep_files;
 use crate::tools::handlers::file_tools_spec::create_file_tool;
@@ -88,8 +93,37 @@ impl FileToolHandler {
         )
         .await;
         let result = match self.kind {
-            FileToolKind::Read => match parse_arguments(&arguments) {
-                Ok(args) => read_file(turn_environment, args, cancellation_token).await,
+            FileToolKind::Read => match parse_arguments::<ReadFileArgs>(&arguments) {
+                Ok(mut args) => {
+                    let history = ReadHistory::collect(&session.clone_history().await);
+                    let requested_limit = args.limit();
+                    args.limit = Some(history.effective_limit(&args));
+                    read_file(turn_environment, args, cancellation_token)
+                        .await
+                        .and_then(|result| {
+                            let output = history.optimize_result(requested_limit, result);
+                            if let Some((phase, bytes)) = output.diagnostic() {
+                                session.services.compatibility_diagnostics.record(
+                                    CompatibilityEventInput {
+                                        phase,
+                                        outcome: CompatibilityOutcome::Success,
+                                        tool_name: Some("read_file"),
+                                        tool_namespace: None,
+                                        representation: ToolRepresentation::Function,
+                                        duration: Duration::ZERO,
+                                        input_bytes: arguments.len(),
+                                        output_bytes: bytes,
+                                        error: None,
+                                    },
+                                );
+                            }
+                            output.to_json().map_err(|err| {
+                                FunctionCallError::Fatal(format!(
+                                    "failed to serialize read_file output: {err}"
+                                ))
+                            })
+                        })
+                }
                 Err(err) => Err(err),
             },
             FileToolKind::Grep => {

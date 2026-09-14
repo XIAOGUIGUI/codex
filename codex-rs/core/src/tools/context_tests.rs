@@ -449,6 +449,55 @@ fn exec_command_tool_output_formats_truncated_response() {
 }
 
 #[test]
+fn exec_command_code_mode_result_caps_large_requested_output() {
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-code-mode".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::ZERO,
+        raw_output: "word ".repeat(50_000).into_bytes(),
+        truncation_policy: TruncationPolicy::Tokens(100_000),
+        max_output_tokens: Some(60_000),
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: Some(50_000),
+        output_omitted_bytes: None,
+        hook_command: None,
+    };
+
+    let result = output.code_mode_result(&ToolPayload::Function {
+        arguments: "{}".to_string(),
+    });
+    let text = result["output"].as_str().expect("text output");
+
+    assert!(approx_token_count(text) <= CODE_MODE_MAX_OUTPUT_TOKENS);
+    assert!(text.contains("Warning: truncated output"));
+    assert!(text.contains(CODE_MODE_OUTPUT_RECOVERY_HINT));
+}
+
+#[test]
+fn exec_command_code_mode_result_preserves_small_output() {
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-code-mode".to_string(),
+        chunk_id: String::new(),
+        wall_time: std::time::Duration::ZERO,
+        raw_output: b"small output".to_vec(),
+        truncation_policy: TruncationPolicy::Tokens(100_000),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        output_omitted_bytes: None,
+        hook_command: None,
+    };
+
+    let result = output.code_mode_result(&ToolPayload::Function {
+        arguments: "{}".to_string(),
+    });
+
+    assert_eq!(result["output"], "small output");
+}
+
+#[test]
 fn exec_command_tool_output_reserves_metadata_budget_and_preserves_policy_units() {
     let payload = ToolPayload::Function {
         arguments: "{}".to_string(),

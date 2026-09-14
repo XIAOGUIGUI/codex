@@ -11,6 +11,7 @@ pub use compatibility::CompatibilityDiagnosticsConfig;
 pub use compatibility::CompatibilityDiagnosticsContext;
 pub use compatibility::CompatibilityDiagnosticsStatus;
 pub use compatibility::CompatibilityEventInput;
+pub use compatibility::CompatibilityMetrics;
 pub use compatibility::CompatibilityOutcome;
 pub use compatibility::CompatibilityReportOptions;
 pub use compatibility::CompatibilityReportSummary;

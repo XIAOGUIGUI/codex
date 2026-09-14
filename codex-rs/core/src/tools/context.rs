@@ -42,6 +42,10 @@ where
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
+const CODE_MODE_MAX_OUTPUT_TOKENS: usize = 8_000;
+const CODE_MODE_OUTPUT_RECOVERY_HINT: &str =
+    "Narrow the command, add a filter, or read a specific range; do not repeat the unchanged call.";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallSource {
     Direct,
@@ -436,16 +440,27 @@ impl ToolOutput for ExecCommandToolOutput {
             output: String,
         }
 
+        let requested_tokens = resolve_max_tokens(self.max_output_tokens);
+        let effective_tokens = requested_tokens.min(CODE_MODE_MAX_OUTPUT_TOKENS);
+        let raw_output = String::from_utf8_lossy(&self.raw_output);
+        let was_truncated = approx_token_count(&raw_output) > effective_tokens;
+        let content_tokens = if was_truncated {
+            effective_tokens.saturating_sub(100)
+        } else {
+            effective_tokens
+        };
+        let mut output = self.truncated_output(content_tokens);
+        if was_truncated {
+            output.push_str("\nRecovery: ");
+            output.push_str(CODE_MODE_OUTPUT_RECOVERY_HINT);
+        }
         let result = UnifiedExecCodeModeResult {
             chunk_id: (!self.chunk_id.is_empty()).then(|| self.chunk_id.clone()),
             wall_time_seconds: self.wall_time.as_secs_f64(),
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
-            output: match self.max_output_tokens {
-                Some(max_tokens) => self.truncated_output(max_tokens),
-                None => String::from_utf8_lossy(&self.raw_output).to_string(),
-            },
+            output,
         };
 
         serde_json::to_value(result).unwrap_or_else(|err| {

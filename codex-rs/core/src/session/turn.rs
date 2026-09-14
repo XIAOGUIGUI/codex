@@ -74,6 +74,7 @@ use codex_async_utils::OrCancelExt;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
 use codex_diagnostics::CompatibilityEventInput;
+use codex_diagnostics::CompatibilityMetrics;
 use codex_diagnostics::CompatibilityOutcome;
 use codex_diagnostics::ToolRepresentation;
 use codex_extension_api::ExtensionData;
@@ -111,6 +112,7 @@ use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::SafetyBufferingEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -551,6 +553,7 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
+                    ..
                 } = sampling_request_output;
                 if model_needs_follow_up {
                     sess.input_queue
@@ -1606,6 +1609,10 @@ async fn run_sampling_request(
                 responses_metadata,
             )?;
         }
+        let history_bytes = serde_json::to_vec(&prompt.input).map_or(0, |value| value.len());
+        let tool_schema_bytes =
+            serde_json::to_vec(prompt.tools.as_ref()).map_or(0, |value| value.len());
+        let instruction_bytes = prompt.base_instructions.text.len();
         let attempt_started = Instant::now();
         let attempt_result = try_run_sampling_request(
             tool_runtime.clone(),
@@ -1621,36 +1628,46 @@ async fn run_sampling_request(
         )
         .await;
         if sess.services.compatibility_diagnostics.is_enabled() {
+            let metrics = sampling_metrics(
+                &attempt_result,
+                history_bytes,
+                tool_schema_bytes,
+                instruction_bytes,
+            );
+            let request_bytes = history_bytes
+                .saturating_add(tool_schema_bytes)
+                .saturating_add(instruction_bytes);
             match &attempt_result {
-                Ok(_) => sess
-                    .services
-                    .compatibility_diagnostics
-                    .record(CompatibilityEventInput {
+                Ok(_) => sess.services.compatibility_diagnostics.record_with_metrics(
+                    CompatibilityEventInput {
                         phase: "provider.inference",
                         outcome: CompatibilityOutcome::Success,
                         tool_name: None,
                         tool_namespace: None,
                         representation: ToolRepresentation::None,
                         duration: attempt_started.elapsed(),
-                        input_bytes: 0,
+                        input_bytes: request_bytes,
                         output_bytes: 0,
                         error: None,
-                    }),
+                    },
+                    metrics,
+                ),
                 Err(error) => {
                     let error = error.to_string();
-                    sess.services
-                        .compatibility_diagnostics
-                        .record(CompatibilityEventInput {
+                    sess.services.compatibility_diagnostics.record_with_metrics(
+                        CompatibilityEventInput {
                             phase: "provider.inference",
                             outcome: CompatibilityOutcome::Failure,
                             tool_name: None,
                             tool_namespace: None,
                             representation: ToolRepresentation::None,
                             duration: attempt_started.elapsed(),
-                            input_bytes: 0,
+                            input_bytes: request_bytes,
                             output_bytes: error.len(),
                             error: Some(&error),
-                        });
+                        },
+                        metrics,
+                    );
                 }
             }
         }
@@ -1693,6 +1710,30 @@ async fn run_sampling_request(
         )
         .await?;
         turn_context.turn_timing_state.record_sampling_retry();
+    }
+}
+
+fn sampling_metrics(
+    result: &CodexResult<SamplingRequestResult>,
+    history_bytes: usize,
+    tool_schema_bytes: usize,
+    instruction_bytes: usize,
+) -> CompatibilityMetrics {
+    let usage = result
+        .as_ref()
+        .ok()
+        .and_then(|result| result.token_usage.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    let non_negative = |value: i64| u64::try_from(value.max(0)).unwrap_or(u64::MAX);
+    CompatibilityMetrics {
+        history_bytes: u64::try_from(history_bytes).unwrap_or(u64::MAX),
+        tool_schema_bytes: u64::try_from(tool_schema_bytes).unwrap_or(u64::MAX),
+        instruction_bytes: u64::try_from(instruction_bytes).unwrap_or(u64::MAX),
+        input_tokens: non_negative(usage.input_tokens),
+        cached_input_tokens: non_negative(usage.cached_input_tokens),
+        output_tokens: non_negative(usage.output_tokens),
+        reasoning_output_tokens: non_negative(usage.reasoning_output_tokens),
     }
 }
 
@@ -1836,6 +1877,7 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+    token_usage: Option<TokenUsage>,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -2694,6 +2736,7 @@ async fn try_run_sampling_request(
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
+                        token_usage: None,
                     });
                 }
             }
@@ -2874,6 +2917,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
+                    token_usage: token_usage.clone(),
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {

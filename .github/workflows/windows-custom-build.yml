@@ -88,6 +88,16 @@ jobs:
           just test -p codex-core third_party_model_receives_recovery_error_on_third_identical_tool_call
           exit $LASTEXITCODE
 
+      - name: Test token-efficiency safeguards
+        shell: pwsh
+        run: |
+          just test -p codex-core file_tools_read_history
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-core adjacent_small_reads_expand_and_overlapping_reads_reuse_history
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-core code_mode_result
+          exit $LASTEXITCODE
+
       - name: Test compatibility diagnostics
         shell: pwsh
         run: |
@@ -328,6 +338,7 @@ jobs:
           - 原生 apply_patch 冒烟测试：PASS
           - npm 隔离安装、恢复、哈希、版本及安全测试：PASS
           - 第三方模型重复工具调用熔断测试：PASS
+          - 连续小范围读取合并、重复读取复用及 Code Mode 输出上限测试：PASS
           - 构建 commit：$env:GITHUB_SHA
           - 流水线：https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
 

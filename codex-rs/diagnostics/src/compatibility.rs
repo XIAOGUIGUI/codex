@@ -35,7 +35,7 @@ mod known_issues;
 use category::classify;
 use known_issues::known_issues;
 
-const SCHEMA_VERSION: u16 = 1;
+const SCHEMA_VERSION: u16 = 2;
 const DEFAULT_RETENTION_DAYS: u16 = 30;
 const DEFAULT_MAX_TOTAL_MIB: u16 = 256;
 const MAX_EVENT_BYTES: usize = 16 * 1024;
@@ -140,6 +140,37 @@ pub struct CompatibilityEventInput<'a> {
     pub error: Option<&'a str>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CompatibilityMetrics {
+    pub history_bytes: u64,
+    pub tool_schema_bytes: u64,
+    pub instruction_bytes: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+}
+
+impl CompatibilityMetrics {
+    fn add_assign(&mut self, other: &Self) {
+        self.history_bytes = self.history_bytes.saturating_add(other.history_bytes);
+        self.tool_schema_bytes = self
+            .tool_schema_bytes
+            .saturating_add(other.tool_schema_bytes);
+        self.instruction_bytes = self
+            .instruction_bytes
+            .saturating_add(other.instruction_bytes);
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.cached_input_tokens = self
+            .cached_input_tokens
+            .saturating_add(other.cached_input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.reasoning_output_tokens = self
+            .reasoning_output_tokens
+            .saturating_add(other.reasoning_output_tokens);
+    }
+}
+
 /// Privacy-safe text observation. The recorder stores only length, a session-salted fingerprint,
 /// and anomaly flags.
 pub struct TextIntegrityEventInput<'a> {
@@ -173,6 +204,8 @@ struct CompatibilityEvent {
     duration_ms: u64,
     input_bytes: usize,
     output_bytes: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metrics: Option<CompatibilityMetrics>,
     #[serde(default)]
     text_fingerprint: Option<String>,
     #[serde(default)]
@@ -261,7 +294,15 @@ impl CompatibilityDiagnostics {
     }
 
     pub fn record(&self, input: CompatibilityEventInput<'_>) {
-        self.record_inner(input, None);
+        self.record_inner(input, None, None);
+    }
+
+    pub fn record_with_metrics(
+        &self,
+        input: CompatibilityEventInput<'_>,
+        metrics: CompatibilityMetrics,
+    ) {
+        self.record_inner(input, None, Some(metrics));
     }
 
     pub fn record_text_integrity(
@@ -296,6 +337,7 @@ impl CompatibilityDiagnostics {
             text_fingerprint
                 .as_deref()
                 .map(|fingerprint| (&analysis, fingerprint)),
+            None,
         );
         analysis
     }
@@ -304,6 +346,7 @@ impl CompatibilityDiagnostics {
         &self,
         input: CompatibilityEventInput<'_>,
         text_integrity: Option<(&TextIntegrityAnalysis, &str)>,
+        metrics: Option<CompatibilityMetrics>,
     ) {
         let Some(inner) = &self.inner else {
             return;
@@ -341,6 +384,7 @@ impl CompatibilityDiagnostics {
             duration_ms: u64::try_from(input.duration.as_millis()).unwrap_or(u64::MAX),
             input_bytes: input.input_bytes,
             output_bytes: input.output_bytes,
+            metrics,
             text_fingerprint: text_integrity.map(|(_, fingerprint)| fingerprint.to_string()),
             text_char_count: text_integrity.map(|(analysis, _)| analysis.char_count),
             integrity_flags: text_integrity.map_or_else(Vec::new, |(analysis, _)| {
@@ -463,6 +507,7 @@ fn writer_loop(
                     duration_ms: 0,
                     input_bytes: 0,
                     output_bytes: 0,
+                    metrics: None,
                     text_fingerprint: None,
                     text_char_count: None,
                     integrity_flags: Vec::new(),
@@ -648,6 +693,7 @@ pub struct CompatibilityReportSummary {
     pub max_private_commit_bytes: Option<u64>,
     pub peak_private_commit_bytes: Option<u64>,
     pub categories: BTreeMap<String, u64>,
+    pub metrics: CompatibilityMetrics,
 }
 
 pub fn build_compatibility_report(
@@ -665,6 +711,7 @@ pub fn build_compatibility_report(
         max_private_commit_bytes: None,
         peak_private_commit_bytes: None,
         categories: BTreeMap::new(),
+        metrics: CompatibilityMetrics::default(),
     };
     let mut samples = BTreeMap::<String, Vec<CompatibilityEvent>>::new();
     let mut sample_count = 0_usize;
@@ -720,6 +767,9 @@ pub fn build_compatibility_report(
                 .categories
                 .entry(event.category.clone())
                 .or_default() += 1;
+            if let Some(metrics) = &event.metrics {
+                summary.metrics.add_assign(metrics);
+            }
             if event.outcome != "success" {
                 summary.failed_events += 1;
                 if sample_count < MAX_REPORT_SAMPLES {
@@ -796,7 +846,7 @@ fn fingerprint_bytes(value: &[u8]) -> String {
 
 fn render_markdown(summary: &CompatibilityReportSummary) -> String {
     let mut output = format!(
-        "# Codex compatibility diagnostics\n\nGenerated: {}\n\nTotal events: {}\n\nFailed events: {}\n\nSampled failures: {}\n\nMalformed lines: {}\n\nDropped events: {}\n\nMaximum resident memory: {}\n\nMaximum Windows private commit: {}\n\nPeak Windows private commit: {}\n\n## Categories\n\n| Category | Count |\n|---|---:|\n",
+        "# Codex compatibility diagnostics\n\nGenerated: {}\n\nTotal events: {}\n\nFailed events: {}\n\nSampled failures: {}\n\nMalformed lines: {}\n\nDropped events: {}\n\nMaximum resident memory: {}\n\nMaximum Windows private commit: {}\n\nPeak Windows private commit: {}\n\n## Token efficiency\n\n| Metric | Total |\n|---|---:|\n| History bytes | {} |\n| Tool schema bytes | {} |\n| Instruction bytes | {} |\n| Input tokens | {} |\n| Cached input tokens | {} |\n| Output tokens | {} |\n| Reasoning output tokens | {} |\n\n## Categories\n\n| Category | Count |\n|---|---:|\n",
         summary.generated_at,
         summary.total_events,
         summary.failed_events,
@@ -806,6 +856,13 @@ fn render_markdown(summary: &CompatibilityReportSummary) -> String {
         display_bytes(summary.max_resident_memory_bytes),
         display_bytes(summary.max_private_commit_bytes),
         display_bytes(summary.peak_private_commit_bytes),
+        summary.metrics.history_bytes,
+        summary.metrics.tool_schema_bytes,
+        summary.metrics.instruction_bytes,
+        summary.metrics.input_tokens,
+        summary.metrics.cached_input_tokens,
+        summary.metrics.output_tokens,
+        summary.metrics.reasoning_output_tokens,
     );
     for (category, count) in &summary.categories {
         output.push_str(&format!("| `{category}` | {count} |\n"));

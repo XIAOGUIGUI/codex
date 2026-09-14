@@ -10,7 +10,7 @@ pub(crate) fn create_file_tool(kind: FileToolKind) -> ToolSpec {
     let (name, description, properties, required) = match kind {
         FileToolKind::Read => (
             "read_file",
-            "Read a text file without invoking PowerShell. Results are line-numbered and bounded; use offset and limit to continue when next_offset is returned.",
+            "Read a text file without invoking PowerShell. Results are line-numbered and bounded; use offset and limit to continue when next_offset is returned. For exploration, read 100-400 lines at a time; use 50 or fewer only for a precisely known range. Re-reading unchanged ranges returns a compact reference to the earlier result.",
             BTreeMap::from([
                 (
                     "file_path".to_string(),
@@ -27,7 +27,7 @@ pub(crate) fn create_file_tool(kind: FileToolKind) -> ToolSpec {
                 (
                     "limit".to_string(),
                     JsonSchema::number(Some(
-                        "Maximum lines to return. Defaults to 400 and cannot exceed 1000."
+                        "Maximum lines to return. Defaults to 400 and cannot exceed 1000. Prefer 100-400 for exploration; use 50 or fewer only for a precisely known range. Consecutive adjacent small reads may be expanded to reduce repeated tool calls."
                             .to_string(),
                     )),
                 ),

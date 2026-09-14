@@ -7,6 +7,7 @@ mod file_mutation_tools;
 pub(crate) mod file_mutation_tools_spec;
 mod file_tools;
 mod file_tools_read;
+mod file_tools_read_history;
 mod file_tools_search;
 pub(crate) mod file_tools_spec;
 mod get_context_remaining;
