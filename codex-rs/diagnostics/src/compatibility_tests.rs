@@ -12,6 +12,7 @@ use super::CompatibilityDiagnostics;
 use super::CompatibilityDiagnosticsConfig;
 use super::CompatibilityDiagnosticsContext;
 use super::CompatibilityEventInput;
+use super::CompatibilityMetrics;
 use super::CompatibilityOutcome;
 use super::CompatibilityReportOptions;
 use super::TextIntegrityEventInput;
@@ -92,17 +93,30 @@ fn report_contains_only_bounded_structured_failure_data() {
         },
     )
     .unwrap();
-    recorder.record(CompatibilityEventInput {
-        phase: "tool.dispatch",
-        outcome: CompatibilityOutcome::Failure,
-        tool_name: Some("apply_patch"),
-        tool_namespace: None,
-        representation: ToolRepresentation::Function,
-        duration: Duration::from_millis(3),
-        input_bytes: 42,
-        output_bytes: 120,
-        error: Some("Failed to find expected lines in C:\\secret\\source.rs: TOP_SECRET_SOURCE"),
-    });
+    recorder.record_with_metrics(
+        CompatibilityEventInput {
+            phase: "tool.dispatch",
+            outcome: CompatibilityOutcome::Failure,
+            tool_name: Some("apply_patch"),
+            tool_namespace: None,
+            representation: ToolRepresentation::Function,
+            duration: Duration::from_millis(3),
+            input_bytes: 42,
+            output_bytes: 120,
+            error: Some(
+                "Failed to find expected lines in C:\\secret\\source.rs: TOP_SECRET_SOURCE",
+            ),
+        },
+        CompatibilityMetrics {
+            history_bytes: 1_000,
+            tool_schema_bytes: 200,
+            instruction_bytes: 100,
+            input_tokens: 400,
+            cached_input_tokens: 300,
+            output_tokens: 20,
+            reasoning_output_tokens: 10,
+        },
+    );
     recorder.record(CompatibilityEventInput {
         phase: "tool.dispatch",
         outcome: CompatibilityOutcome::Failure,
@@ -126,6 +140,18 @@ fn report_contains_only_bounded_structured_failure_data() {
     .unwrap();
     assert_eq!(summary.total_events, 2);
     assert_eq!(summary.failed_events, 2);
+    assert_eq!(
+        summary.metrics,
+        CompatibilityMetrics {
+            history_bytes: 1_000,
+            tool_schema_bytes: 200,
+            instruction_bytes: 100,
+            input_tokens: 400,
+            cached_input_tokens: 300,
+            output_tokens: 20,
+            reasoning_output_tokens: 10,
+        }
+    );
 
     let mut archive = ZipArchive::new(File::open(output).unwrap()).unwrap();
     let mut samples = String::new();

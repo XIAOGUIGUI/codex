@@ -15,35 +15,54 @@ pub(super) const MAX_RESULT_BYTES: usize = 32 * 1024;
 const MAX_CAPTURED_LINE_BYTES: usize = MAX_RESULT_BYTES * 2;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub(super) struct ReadFileArgs {
-    file_path: String,
-    offset: Option<usize>,
-    limit: Option<usize>,
+    pub(super) file_path: String,
+    pub(super) offset: Option<usize>,
+    pub(super) limit: Option<usize>,
 }
 
-#[derive(Serialize)]
-struct ReadFileResult {
-    path: String,
-    start_line: usize,
-    end_line: usize,
-    content: String,
-    truncated: bool,
-    next_offset: Option<usize>,
+impl ReadFileArgs {
+    pub(super) fn offset(&self) -> usize {
+        self.offset.unwrap_or(1)
+    }
+
+    pub(super) fn limit(&self) -> usize {
+        self.limit.unwrap_or(DEFAULT_READ_LINES)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct ReadFileResult {
+    pub(super) path: String,
+    pub(super) start_line: usize,
+    pub(super) end_line: usize,
+    pub(super) content: String,
+    pub(super) truncated: bool,
+    pub(super) next_offset: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) read_optimization: Option<ReadOptimization>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct ReadOptimization {
+    pub(super) requested_limit: usize,
+    pub(super) effective_limit: usize,
+    pub(super) reason: String,
 }
 
 pub(super) async fn read_file(
     environment: &crate::session::turn_context::TurnEnvironment,
     args: ReadFileArgs,
     cancellation_token: CancellationToken,
-) -> Result<String, FunctionCallError> {
-    let offset = args.offset.unwrap_or(1);
+) -> Result<ReadFileResult, FunctionCallError> {
+    let offset = args.offset();
     if offset == 0 {
         return Err(FunctionCallError::RespondToModel(
             "read_file.offset must be at least 1".to_string(),
         ));
     }
-    let limit = args.limit.unwrap_or(DEFAULT_READ_LINES);
+    let limit = args.limit();
     if limit == 0 || limit > MAX_READ_LINES {
         return Err(FunctionCallError::RespondToModel(format!(
             "read_file.limit must be between 1 and {MAX_READ_LINES}"
@@ -115,11 +134,12 @@ pub(super) async fn read_file(
     .map_err(|err| FunctionCallError::RespondToModel(format!("read_file failed: {err}")))?;
 
     formatter
-        .into_json(path.to_string())
+        .into_result(path.to_string())
         .map_err(|err| match err {
             ReadResultError::OffsetPastEnd { line_count } => FunctionCallError::RespondToModel(
                 format!("read_file.offset {offset} exceeds the file's {line_count} lines"),
             ),
+            #[cfg(test)]
             ReadResultError::Serialize(err) => {
                 FunctionCallError::Fatal(format!("failed to serialize read_file output: {err}"))
             }
@@ -358,7 +378,7 @@ impl StreamingReadFormatter {
         Ok(())
     }
 
-    fn into_json(self, path: String) -> Result<String, ReadResultError> {
+    fn into_result(self, path: String) -> Result<ReadFileResult, ReadResultError> {
         let line_count = self.line_number - 1;
         let empty_file_at_start = self.reached_eof && line_count == 0 && self.offset == 1;
         if self.reached_eof && self.offset > line_count && !empty_file_at_start {
@@ -368,21 +388,29 @@ impl StreamingReadFormatter {
         let has_more_lines = self.has_more_lines || end_line < line_count;
         let truncated = has_more_lines || self.output_truncated;
         let next_offset = has_more_lines.then_some(end_line.saturating_add(1));
-        serde_json::to_string_pretty(&ReadFileResult {
+        Ok(ReadFileResult {
             path,
             start_line: self.offset,
             end_line,
             content: self.content,
             truncated,
             next_offset,
+            read_optimization: None,
         })
-        .map_err(ReadResultError::Serialize)
+    }
+
+    #[cfg(test)]
+    fn into_json(self, path: String) -> Result<String, ReadResultError> {
+        serde_json::to_string_pretty(&self.into_result(path)?).map_err(ReadResultError::Serialize)
     }
 }
 
 #[derive(Debug)]
 enum ReadResultError {
-    OffsetPastEnd { line_count: usize },
+    OffsetPastEnd {
+        line_count: usize,
+    },
+    #[cfg(test)]
     Serialize(serde_json::Error),
 }
 

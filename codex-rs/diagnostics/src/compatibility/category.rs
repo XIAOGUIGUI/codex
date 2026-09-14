@@ -4,6 +4,18 @@ pub(super) struct ClassifiedError {
 }
 
 pub(super) fn classify(phase: &str, tool: Option<&str>, error: Option<&str>) -> ClassifiedError {
+    if phase == "file.read.auto_expanded" {
+        return classified(
+            "file.read.auto_expanded",
+            "A consecutive small read was expanded to reduce tool calls",
+        );
+    }
+    if phase == "file.read.unchanged" {
+        return classified(
+            "file.read.unchanged",
+            "An unchanged range reused content already present in history",
+        );
+    }
     let Some(error) = error else {
         return classified("operation.completed", "operation completed");
     };
