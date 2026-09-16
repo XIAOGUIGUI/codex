@@ -476,27 +476,25 @@ jobs:
         shell: pwsh
         run: |
           $manifest = Get-Content -LiteralPath "dist/windows-overlay/release-manifest.json" -Raw | ConvertFrom-Json
-          # npm publishes "may take a few minutes to become available", so poll the
-          # version endpoint directly for up to 6 minutes. The unique query string
-          # per attempt bypasses any CDN-cached 404 left over from the availability
-          # check that ran before the publish.
+          # npm publishes are processed asynchronously ("may take a few minutes
+          # to become available"), so poll the version endpoint for up to 6
+          # minutes. A unique query string per attempt bypasses any CDN-cached
+          # 404 left over from the availability check that ran before the
+          # publish. curl.exe is used because the PowerShell web cmdlets reject
+          # this URL shape (encoded slash in the path) at URI parse time.
           $versionEndpoint = "https://registry.npmjs.org/@chenronggui%2Fcodex-win-patch/$env:PACKAGE_VERSION"
+          $bodyPath = Join-Path $env:RUNNER_TEMP "registry-verify.json"
           $dist = $null
           $lastStatus = $null
           for ($attempt = 1; $attempt -le 36; $attempt++) {
               $uri = "$versionEndpoint?attempt=$attempt&ts=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
-              try {
-                  $dist = Invoke-RestMethod -Uri $uri -Headers @{ "Cache-Control" = "no-cache" }
+              $lastStatus = (& curl.exe -sS -w "%{http_code}" -o $bodyPath $uri 2>&1 | Select-Object -Last 1)
+              if ($lastStatus -eq "200") {
+                  $dist = Get-Content -LiteralPath $bodyPath -Raw | ConvertFrom-Json
                   break
-              } catch {
-                  if ($_.Exception.Response) {
-                      $lastStatus = [int]$_.Exception.Response.StatusCode
-                  } else {
-                      $lastStatus = $_.Exception.Message
-                  }
-                  Write-Host "Waiting for npm registry propagation ($attempt/36, last HTTP status: $lastStatus)..."
-                  Start-Sleep -Seconds 10
               }
+              Write-Host "Waiting for npm registry propagation ($attempt/36, last HTTP status: $lastStatus)..."
+              Start-Sleep -Seconds 10
           }
           if ($null -eq $dist) {
               throw "Published package did not become visible in the npm registry after 6 minutes. Last HTTP status: $lastStatus"
