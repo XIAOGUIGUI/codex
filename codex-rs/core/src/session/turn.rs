@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -58,6 +59,8 @@ use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::spec_plan::build_tool_router;
 use crate::tools::spec_plan::tool_suggest_enabled;
+use crate::tools::tool_call_loop::ToolCallLoopDetector;
+use crate::tools::tool_call_loop::ToolCallLoopPolicy;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::error_or_panic;
@@ -70,6 +73,10 @@ use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
+use codex_diagnostics::CompatibilityEventInput;
+use codex_diagnostics::CompatibilityMetrics;
+use codex_diagnostics::CompatibilityOutcome;
+use codex_diagnostics::ToolRepresentation;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
@@ -104,6 +111,7 @@ use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::SafetyBufferingEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -308,6 +316,12 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh turn input in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
 
+    let tool_call_loop_policy = if turn_context.provider.info().supports_codex_backend_routes() {
+        ToolCallLoopPolicy::Disabled
+    } else {
+        ToolCallLoopPolicy::ProtectToolCalls
+    };
+    let tool_call_loop_detector = Arc::new(ToolCallLoopDetector::new(tool_call_loop_policy));
     let mut next_step_context = Some(first_step_context);
     loop {
         // Note that pending_input would be something like a message the user
@@ -393,6 +407,7 @@ pub(crate) async fn run_turn(
                 Arc::clone(&sess),
                 Arc::clone(&step_context),
                 Arc::clone(&turn_context.extension_data),
+                Arc::clone(&tool_call_loop_detector),
                 Arc::clone(&turn_diff_tracker),
                 &mut client_session,
                 &responses_metadata,
@@ -407,6 +422,7 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
+                    ..
                 } = sampling_request_output;
                 if model_needs_follow_up {
                     sess.input_queue
@@ -1383,6 +1399,7 @@ async fn run_sampling_request(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
+    tool_call_loop_detector: Arc<ToolCallLoopDetector>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
@@ -1427,19 +1444,69 @@ async fn run_sampling_request(
             step_context.as_ref(),
             base_instructions.clone(),
         );
-        let err = match try_run_sampling_request(
+        let history_bytes = serde_json::to_vec(&prompt.input).map_or(0, |value| value.len());
+        let tool_schema_bytes =
+            serde_json::to_vec(prompt.tools.as_ref()).map_or(0, |value| value.len());
+        let instruction_bytes = prompt.base_instructions.text.len();
+        let attempt_started = Instant::now();
+        let attempt_result = try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&step_context),
             Arc::clone(&turn_store),
+            Arc::clone(&tool_call_loop_detector),
             client_session,
             responses_metadata,
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
         )
-        .await
-        {
+        .await;
+        if sess.services.compatibility_diagnostics.is_enabled() {
+            let metrics = sampling_metrics(
+                &attempt_result,
+                history_bytes,
+                tool_schema_bytes,
+                instruction_bytes,
+            );
+            let request_bytes = history_bytes
+                .saturating_add(tool_schema_bytes)
+                .saturating_add(instruction_bytes);
+            match &attempt_result {
+                Ok(_) => sess.services.compatibility_diagnostics.record_with_metrics(
+                    CompatibilityEventInput {
+                        phase: "provider.inference",
+                        outcome: CompatibilityOutcome::Success,
+                        tool_name: None,
+                        tool_namespace: None,
+                        representation: ToolRepresentation::None,
+                        duration: attempt_started.elapsed(),
+                        input_bytes: request_bytes,
+                        output_bytes: 0,
+                        error: None,
+                    },
+                    metrics,
+                ),
+                Err(error) => {
+                    let error = error.to_string();
+                    sess.services.compatibility_diagnostics.record_with_metrics(
+                        CompatibilityEventInput {
+                            phase: "provider.inference",
+                            outcome: CompatibilityOutcome::Failure,
+                            tool_name: None,
+                            tool_namespace: None,
+                            representation: ToolRepresentation::None,
+                            duration: attempt_started.elapsed(),
+                            input_bytes: request_bytes,
+                            output_bytes: error.len(),
+                            error: Some(&error),
+                        },
+                        metrics,
+                    );
+                }
+            }
+        }
+        let err = match attempt_result {
             Ok(output) => {
                 return Ok((output, original_input.unwrap_or(prompt.input)));
             }
@@ -1478,6 +1545,30 @@ async fn run_sampling_request(
         )
         .await?;
         turn_context.turn_timing_state.record_sampling_retry();
+    }
+}
+
+fn sampling_metrics(
+    result: &CodexResult<SamplingRequestResult>,
+    history_bytes: usize,
+    tool_schema_bytes: usize,
+    instruction_bytes: usize,
+) -> CompatibilityMetrics {
+    let usage = result
+        .as_ref()
+        .ok()
+        .and_then(|result| result.token_usage.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    let non_negative = |value: i64| u64::try_from(value.max(0)).unwrap_or(u64::MAX);
+    CompatibilityMetrics {
+        history_bytes: u64::try_from(history_bytes).unwrap_or(u64::MAX),
+        tool_schema_bytes: u64::try_from(tool_schema_bytes).unwrap_or(u64::MAX),
+        instruction_bytes: u64::try_from(instruction_bytes).unwrap_or(u64::MAX),
+        input_tokens: non_negative(usage.input_tokens),
+        cached_input_tokens: non_negative(usage.cached_input_tokens),
+        output_tokens: non_negative(usage.output_tokens),
+        reasoning_output_tokens: non_negative(usage.reasoning_output_tokens),
     }
 }
 
@@ -1621,6 +1712,7 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+    token_usage: Option<TokenUsage>,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -2230,6 +2322,7 @@ async fn try_run_sampling_request(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
+    tool_call_loop_detector: Arc<ToolCallLoopDetector>,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
     turn_diff_tracker: SharedTurnDiffTracker,
@@ -2407,6 +2500,7 @@ async fn try_run_sampling_request(
                     turn_context: turn_context.clone(),
                     turn_store: Arc::clone(&turn_store),
                     tool_runtime: tool_runtime.clone(),
+                    tool_call_loop_detector: Arc::clone(&tool_call_loop_detector),
                     cancellation_token: cancellation_token.child_token(),
                 };
 
@@ -2452,6 +2546,7 @@ async fn try_run_sampling_request(
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
+                        token_usage: None,
                     });
                 }
             }
@@ -2632,6 +2727,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
+                    token_usage: token_usage.clone(),
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {

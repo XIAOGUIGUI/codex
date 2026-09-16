@@ -12780,6 +12780,7 @@
           "sessionStart",
           "sessionEnd",
           "userPromptSubmit",
+          "userInputRequest",
           "subagentStart",
           "subagentStop",
           "stop",
@@ -13969,6 +13970,13 @@
             "type": "array"
           },
           "SubagentStop": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "UserInputRequest": {
+            "default": [],
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
             },
@@ -20427,6 +20435,13 @@
       "ThreadCompactStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "guidance": {
+            "description": "Optional instructions describing which context the compactor should prioritize.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "threadId": {
             "type": "string"
           }

@@ -53,6 +53,11 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    /// Caps serialized function arguments before the model response item enters history.
+    fn model_argument_bytes_limit(&self) -> Option<usize> {
+        None
+    }
+
     /// Whether this built-in control tool needs a structured tool-call event.
     fn is_builtin_control_tool(&self) -> bool {
         false
@@ -92,6 +97,11 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     /// Observes a tool result only after all PostToolUse hooks accept it.
     fn on_tool_result_accepted(&self, _invocation: &ToolInvocation, _result: &dyn ToolOutput) {}
 
+    /// Returns the stable hook identity and matcher aliases for this tool.
+    fn hook_tool_name(&self, invocation: &ToolInvocation) -> HookToolName {
+        function_hook_tool_name(invocation)
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -102,7 +112,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         };
 
         Some(PostToolUsePayload {
-            tool_name: function_hook_tool_name(invocation),
+            tool_name: self.hook_tool_name(invocation),
             tool_use_id: result.post_tool_use_id(&invocation.call_id),
             tool_input: result
                 .post_tool_use_input(&invocation.payload)
@@ -132,7 +142,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         };
 
         Some(PreToolUsePayload {
-            tool_name: function_hook_tool_name(invocation),
+            tool_name: self.hook_tool_name(invocation),
             tool_input: function_hook_tool_input(arguments),
         })
     }
@@ -286,6 +296,7 @@ pub(crate) struct RegisteredTool {
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: IndexMap<ToolName, RegisteredTool>,
+    aliases: IndexMap<ToolName, ToolName>,
     first_collision: Option<ToolName>,
 }
 
@@ -391,6 +402,16 @@ impl ToolRegistry {
         self.first_collision.get_or_insert(tool_name);
     }
 
+    /// Registers a dispatch-only compatibility name without changing the
+    /// model-visible tool surface. An exact runtime registration always wins.
+    pub(crate) fn register_alias(&mut self, alias: ToolName, canonical: ToolName) {
+        let alias = alias.with_default_namespace();
+        let canonical = canonical.with_default_namespace();
+        if alias != canonical {
+            self.aliases.insert(alias, canonical);
+        }
+    }
+
     pub(crate) fn first_collision(&self) -> Option<&ToolName> {
         self.first_collision.as_ref()
     }
@@ -407,6 +428,12 @@ impl ToolRegistry {
 
     pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = &mut RegisteredTool> {
         self.tools.values_mut()
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&RegisteredTool) -> bool) {
+        self.tools.retain(|_, tool| keep(tool));
+        self.aliases
+            .retain(|_, canonical| self.tools.contains_key(canonical));
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
@@ -457,8 +484,13 @@ impl ToolRegistry {
     }
 
     pub(crate) fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
+        let name = name.clone().with_default_namespace();
+        if let Some(tool) = self.tools.get(&name) {
+            return Some(Arc::clone(&tool.runtime));
+        }
+        let canonical = self.aliases.get(&name).unwrap_or(&name);
         self.tools
-            .get(&name.clone().with_default_namespace())
+            .get(canonical)
             .map(|tool| Arc::clone(&tool.runtime))
     }
 
@@ -481,6 +513,10 @@ impl ToolRegistry {
         name: &ToolName,
     ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         self.tool(name)?.create_diff_consumer()
+    }
+
+    pub(crate) fn model_argument_bytes_limit(&self, name: &ToolName) -> Option<usize> {
+        self.tool(name)?.model_argument_bytes_limit()
     }
 
     pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {

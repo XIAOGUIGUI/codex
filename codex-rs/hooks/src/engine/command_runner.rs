@@ -16,6 +16,8 @@ use async_channel::Sender;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 #[cfg(windows)]
 use codex_utils_pty::JobObject;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
@@ -210,6 +212,54 @@ pub(crate) async fn run_command(
     input_json: &str,
     cwd: &Path,
 ) -> HandlerRunResult {
+    run_command_with_output_limit(
+        runtime,
+        handler,
+        command,
+        env,
+        input_json,
+        cwd,
+        CommandOutputLimit::Unbounded,
+    )
+    .await
+}
+
+pub(crate) async fn run_command_bounded(
+    runtime: &CommandHookRuntime,
+    handler: &ConfiguredHandler,
+    command: &str,
+    env: &HashMap<String, String>,
+    input_json: &str,
+    cwd: &Path,
+    bytes_per_stream: usize,
+) -> HandlerRunResult {
+    run_command_with_output_limit(
+        runtime,
+        handler,
+        command,
+        env,
+        input_json,
+        cwd,
+        CommandOutputLimit::BytesPerStream(bytes_per_stream),
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum CommandOutputLimit {
+    Unbounded,
+    BytesPerStream(usize),
+}
+
+async fn run_command_with_output_limit(
+    runtime: &CommandHookRuntime,
+    handler: &ConfiguredHandler,
+    command: &str,
+    env: &HashMap<String, String>,
+    input_json: &str,
+    cwd: &Path,
+    output_limit: CommandOutputLimit,
+) -> HandlerRunResult {
     let started_at = chrono::Utc::now().timestamp();
     let started = Instant::now();
 
@@ -282,9 +332,31 @@ pub(crate) async fn run_command(
         );
     }
 
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        let _ = child.kill().await;
+        return finish_command_run(
+            started_at,
+            started,
+            CommandRunCompletion {
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                error: Some("hook output pipes were unavailable".to_string()),
+                outcome: "wait_error",
+            },
+        );
+    };
     let timeout_duration = Duration::from_secs(handler.timeout_sec);
-    match timeout(timeout_duration, child.wait_with_output()).await {
-        Ok(Ok(output)) => {
+    let completion = async {
+        let (status, stdout, stderr) = tokio::try_join!(
+            child.wait(),
+            read_command_output(stdout, output_limit),
+            read_command_output(stderr, output_limit),
+        )?;
+        Ok::<_, std::io::Error>((status, stdout, stderr))
+    };
+    match timeout(timeout_duration, completion).await {
+        Ok(Ok((status, stdout, stderr))) => {
             // Successfully completed hooks may intentionally leave detached helpers running.
             #[cfg(windows)]
             if let Some(job) = process_tree_guard.job.as_ref() {
@@ -295,37 +367,72 @@ pub(crate) async fn run_command(
                 started_at,
                 started,
                 CommandRunCompletion {
-                    exit_code: output.status.code(),
-                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                    exit_code: status.code(),
+                    stdout: String::from_utf8_lossy(&stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&stderr).to_string(),
                     error: None,
                     outcome: "completed",
                 },
             )
         }
-        Ok(Err(err)) => finish_command_run(
-            started_at,
-            started,
-            CommandRunCompletion {
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                error: Some(err.to_string()),
-                outcome: "wait_error",
-            },
-        ),
-        Err(_) => finish_command_run(
-            started_at,
-            started,
-            CommandRunCompletion {
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                error: Some(format!("hook timed out after {}s", handler.timeout_sec)),
-                outcome: "timeout",
-            },
-        ),
+        Ok(Err(err)) => {
+            let _ = child.kill().await;
+            finish_command_run(
+                started_at,
+                started,
+                CommandRunCompletion {
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    error: Some(err.to_string()),
+                    outcome: "wait_error",
+                },
+            )
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            finish_command_run(
+                started_at,
+                started,
+                CommandRunCompletion {
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    error: Some(format!("hook timed out after {}s", handler.timeout_sec)),
+                    outcome: "timeout",
+                },
+            )
+        }
     }
+}
+
+async fn read_command_output(
+    mut reader: impl AsyncRead + Unpin,
+    output_limit: CommandOutputLimit,
+) -> std::io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    match output_limit {
+        CommandOutputLimit::Unbounded => {
+            reader.read_to_end(&mut output).await?;
+        }
+        CommandOutputLimit::BytesPerStream(limit) => {
+            let mut chunk = [0_u8; 8192];
+            loop {
+                let read = reader.read(&mut chunk).await?;
+                if read == 0 {
+                    break;
+                }
+                if output.len().saturating_add(read) > limit {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "hook output exceeded the configured limit",
+                    ));
+                }
+                output.extend_from_slice(&chunk[..read]);
+            }
+        }
+    }
+    Ok(output)
 }
 
 // Needed only until command hooks move to the exec server, which owns process-tree cleanup.

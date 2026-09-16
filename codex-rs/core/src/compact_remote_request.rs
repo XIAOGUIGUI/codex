@@ -5,6 +5,7 @@ use super::trim_function_call_history_to_fit_context_window;
 use crate::Prompt;
 use crate::client::CompactConversationRequestSettings;
 use crate::compact::CompactionAnalyticsDetails;
+use crate::context::CompactionGuidance;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::session::Session;
@@ -27,10 +28,14 @@ pub(super) async fn run_remote_compact_attempt(
     compaction_trace: &CompactionTraceContext,
     compaction_metadata: CompactionTurnMetadata,
     analytics_details: &mut CompactionAnalyticsDetails,
+    guidance: Option<&CompactionGuidance>,
 ) -> CodexResult<RemoteCompactAttempt> {
     let turn_context = &step_context.turn;
     let mut history = sess.clone_history().await;
-    let base_instructions = sess.get_prompt_base_instructions().await;
+    let mut base_instructions = sess.get_prompt_base_instructions().await;
+    if let Some(guidance) = guidance {
+        guidance.append_to(&mut base_instructions.text);
+    }
     let (rewritten_outputs, estimated_deleted_tokens) =
         trim_function_call_history_to_fit_context_window(
             &mut history,

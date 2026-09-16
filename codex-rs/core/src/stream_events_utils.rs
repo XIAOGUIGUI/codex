@@ -16,6 +16,11 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::tool_log_payload;
+use crate::tools::tool_call_loop::ToolCallLoopDecision;
+use crate::tools::tool_call_loop::ToolCallLoopDetector;
+use codex_diagnostics::CompatibilityOutcome;
+use codex_diagnostics::TextIntegrityEventInput;
+use codex_diagnostics::ToolRepresentation;
 use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
@@ -206,6 +211,7 @@ pub(crate) struct HandleOutputCtx {
     pub turn_context: Arc<TurnContext>,
     pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
+    pub tool_call_loop_detector: Arc<ToolCallLoopDetector>,
     pub cancellation_token: CancellationToken,
 }
 
@@ -298,6 +304,44 @@ pub(crate) async fn handle_output_item_done(
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
+            if ctx.sess.services.compatibility_diagnostics.is_enabled()
+                && let crate::tools::context::ToolPayload::Function { arguments } = &call.payload
+            {
+                ctx.sess
+                    .services
+                    .compatibility_diagnostics
+                    .record_text_integrity(TextIntegrityEventInput {
+                        phase: "model.text_integrity.tool_arguments.completed",
+                        outcome: CompatibilityOutcome::Failure,
+                        tool_name: Some(call.tool_name.name.as_str()),
+                        tool_namespace: None,
+                        representation: ToolRepresentation::Function,
+                        text: arguments,
+                    });
+            }
+            if let (Some(limit), crate::tools::context::ToolPayload::Function { arguments }) = (
+                ctx.tool_runtime.model_argument_bytes_limit(&call.tool_name),
+                &call.payload,
+            ) && arguments
+                .len()
+                .saturating_add(
+                    call.encrypted_function_args
+                        .as_ref()
+                        .map_or(0, |encrypted| {
+                            encrypted
+                                .iter()
+                                .map(String::len)
+                                .fold(0usize, usize::saturating_add)
+                        }),
+                )
+                > limit
+            {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "{} plaintext and encrypted arguments exceed the combined {limit}-byte limit; use apply_patch for larger changes",
+                    call.tool_name
+                )));
+            }
+
             ctx.sess
                 .input_queue
                 .accept_mailbox_delivery_for_current_turn(
@@ -317,6 +361,76 @@ pub(crate) async fn handle_output_item_done(
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
 
+            let representation = match &call.payload {
+                crate::tools::context::ToolPayload::Function { .. } => ToolRepresentation::Function,
+                crate::tools::context::ToolPayload::ToolSearch { .. } => {
+                    ToolRepresentation::ToolSearch
+                }
+                crate::tools::context::ToolPayload::Custom { .. } => ToolRepresentation::Custom,
+            };
+            let input_bytes = match &call.payload {
+                crate::tools::context::ToolPayload::Function { arguments } => arguments.len(),
+                crate::tools::context::ToolPayload::ToolSearch { arguments } => {
+                    arguments.query.len()
+                }
+                crate::tools::context::ToolPayload::Custom { input } => input.len(),
+            };
+            match ctx.tool_call_loop_detector.observe(&call) {
+                ToolCallLoopDecision::Allow => {}
+                ToolCallLoopDecision::Reject { attempt } => {
+                    const MESSAGE: &str = "Repeated identical tool call blocked after two executions. Do not retry the same tool with the same arguments. Use materially different arguments, use a different tool, re-read the relevant state, or ask the user for help.";
+                    tracing::warn!(
+                        tool_name = %call.tool_name,
+                        attempt,
+                        "blocked repeated identical model tool call"
+                    );
+                    ctx.sess.services.compatibility_diagnostics.record(
+                        codex_diagnostics::CompatibilityEventInput {
+                            phase: "model.tool_loop.rejected",
+                            outcome: CompatibilityOutcome::Failure,
+                            tool_name: Some(call.tool_name.name.as_str()),
+                            tool_namespace: call.tool_name.namespace.as_deref(),
+                            representation,
+                            duration: std::time::Duration::ZERO,
+                            input_bytes,
+                            output_bytes: MESSAGE.len(),
+                            error: Some("repeated identical tool call"),
+                        },
+                    );
+                    let response = ToolCallRuntime::failure_response(
+                        call,
+                        FunctionCallError::RespondToModel(MESSAGE.to_string()),
+                    );
+                    output.needs_follow_up = true;
+                    output.tool_future = Some(Box::pin(async move {
+                        Ok(ResponseItemEnvelope::new(response.into()))
+                    }));
+                    return Ok(output);
+                }
+                ToolCallLoopDecision::Abort { attempt } => {
+                    const MESSAGE: &str = "Turn aborted because the model repeated the same tool call after receiving loop-recovery guidance.";
+                    tracing::warn!(
+                        tool_name = %call.tool_name,
+                        attempt,
+                        "aborted repeated model tool-call loop"
+                    );
+                    ctx.sess.services.compatibility_diagnostics.record(
+                        codex_diagnostics::CompatibilityEventInput {
+                            phase: "model.tool_loop.aborted",
+                            outcome: CompatibilityOutcome::Failure,
+                            tool_name: Some(call.tool_name.name.as_str()),
+                            tool_namespace: call.tool_name.namespace.as_deref(),
+                            representation,
+                            duration: std::time::Duration::ZERO,
+                            input_bytes,
+                            output_bytes: MESSAGE.len(),
+                            error: Some("repeated identical tool call after recovery guidance"),
+                        },
+                    );
+                    return Err(CodexErr::Fatal(MESSAGE.to_string()));
+                }
+            }
+
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_future: InFlightFuture<'static> = Box::pin(
                 ctx.tool_runtime
@@ -329,6 +443,21 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
+            if ctx.sess.services.compatibility_diagnostics.is_enabled()
+                && let Some(text) = raw_assistant_output_text_from_item(&item)
+            {
+                ctx.sess
+                    .services
+                    .compatibility_diagnostics
+                    .record_text_integrity(TextIntegrityEventInput {
+                        phase: "model.text_integrity.assistant.completed",
+                        outcome: CompatibilityOutcome::Failure,
+                        tool_name: None,
+                        tool_namespace: None,
+                        representation: ToolRepresentation::None,
+                        text: &text,
+                    });
+            }
             let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
                 TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),

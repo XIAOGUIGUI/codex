@@ -6540,6 +6540,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         )
         .with_legacy_custom_ca_fallback(),
         session_telemetry: session_telemetry.clone(),
+        compatibility_diagnostics: Default::default(),
         models_manager: Arc::clone(&models_manager),
         git_root_discovery: Arc::default(),
         tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -8840,6 +8841,7 @@ where
         )
         .with_legacy_custom_ca_fallback(),
         session_telemetry: session_telemetry.clone(),
+        compatibility_diagnostics: Default::default(),
         models_manager: Arc::clone(&models_manager),
         git_root_discovery: Arc::default(),
         tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -12237,6 +12239,9 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         turn_context: Arc::clone(&tc),
         turn_store: Arc::new(codex_extension_api::ExtensionData::new(tc.sub_id.clone())),
         tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
+        tool_call_loop_detector: Arc::new(crate::tools::tool_call_loop::ToolCallLoopDetector::new(
+            crate::tools::tool_call_loop::ToolCallLoopPolicy::Disabled,
+        )),
         cancellation_token: CancellationToken::new(),
     };
 

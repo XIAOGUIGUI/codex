@@ -338,6 +338,8 @@ fn file_system_permissions_schema() -> JsonSchema {
 
 fn windows_shell_guidance() -> &'static str {
     r#"Windows safety rules:
+- Prefer `read_file`, `grep_files`, and `glob_files` for ordinary file inspection. Avoid broad `Get-Content`, `Select-String`, and `Get-ChildItem -Recurse` pipelines when a bounded file tool can express the operation.
+- The `cmd` value is already executed as a script body by the configured PowerShell. Use PowerShell syntax directly; do not wrap the body in another `pwsh -Command` or `powershell -Command`, because nested command parsing can corrupt quotes, `$env:` expressions, regular expressions, and non-ASCII text. Use `pwsh -File` only when intentionally running an existing `.ps1` file.
 - Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.
 - Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked.
 - When using `Start-Process` to launch a background helper or service, pass `-WindowStyle Hidden` unless the user explicitly asked for a visible interactive window. Use visible windows only for interactive tools the user needs to see or control."#

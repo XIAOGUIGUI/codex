@@ -528,7 +528,11 @@ fn append_matcher_groups(
                         source.path.as_path(),
                         warnings,
                     );
-                    let runs_async = r#async && event_name != HookEventName::SessionEnd;
+                    let runs_async = r#async
+                        && !matches!(
+                            event_name,
+                            HookEventName::SessionEnd | HookEventName::UserInputRequest
+                        );
                     if r#async && !runs_async {
                         warnings.push(format!(
                             "running async {} hook synchronously in {}",
@@ -586,7 +590,10 @@ fn append_matcher_groups(
                     timeout_sec,
                     status_message,
                 } => {
-                    if event_name == HookEventName::SessionEnd {
+                    if matches!(
+                        event_name,
+                        HookEventName::SessionEnd | HookEventName::UserInputRequest
+                    ) {
                         source.record_load_failure(
                             format!(
                                 "skipping MCP tool hook in {}: {} MCP hooks are not supported",

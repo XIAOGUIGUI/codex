@@ -46,6 +46,7 @@ use supports_color::Stream;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
 mod cloud_config;
+mod compatibility_diagnostics_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod doctor;
@@ -67,6 +68,7 @@ use crate::plugin_cmd::PluginCli;
 use crate::plugin_cmd::PluginSubcommand;
 use crate::queue_cmd::QueueCommand;
 use crate::remote_control_cmd::RemoteControlCommand;
+use compatibility_diagnostics_cmd::CompatibilityDiagnosticsCommand;
 use doctor::DoctorCommand;
 use state_db_recovery as local_state_db;
 
@@ -251,6 +253,9 @@ enum DebugSubcommand {
 
     /// Render the model-visible prompt input list as JSON.
     PromptInput(DebugPromptInputCommand),
+
+    /// Inspect and export privacy-safe compatibility diagnostics.
+    CompatibilityDiagnostics(CompatibilityDiagnosticsCommand),
 
     /// Replay a rollout trace bundle and write reduced state JSON.
     #[clap(hide = true)]
@@ -1697,6 +1702,14 @@ async fn cli_main(
                     arg0_paths.clone(),
                 )
                 .await?;
+            }
+            DebugSubcommand::CompatibilityDiagnostics(cmd) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "debug compatibility-diagnostics",
+                )?;
+                compatibility_diagnostics_cmd::run(cmd, &root_config_overrides).await?;
             }
             DebugSubcommand::TraceReduce(cmd) => {
                 reject_remote_mode_for_subcommand(

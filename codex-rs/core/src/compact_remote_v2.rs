@@ -16,6 +16,7 @@ use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_remote::should_keep_compacted_history_item;
 use crate::compact_remote_history::HistoryItemGroup;
 use crate::compact_remote_history::history_item_groups;
+use crate::context::CompactionGuidance;
 use crate::context_manager::estimate_item_token_count;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -79,6 +80,11 @@ const MAX_RETAINED_AGENT_MESSAGE_TOKENS: i64 = 10_000;
 // retry budget smaller than the general Responses stream retry budget.
 const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
 
+struct RemoteCompactionParameters<'a> {
+    metadata: CompactionTurnMetadata,
+    guidance: Option<&'a CompactionGuidance>,
+}
+
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
@@ -101,6 +107,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
         Some(client_session),
         initial_context_injection,
         compaction_metadata,
+        /*guidance*/ None,
     )
     .await
 }
@@ -108,6 +115,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
 pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    guidance: Option<&CompactionGuidance>,
 ) -> CodexResult<()> {
     // Standalone compaction is its own request boundary, so it captures a fresh step.
     let step_context = sess
@@ -135,6 +143,7 @@ pub(crate) async fn run_remote_compact_task(
         /*client_session*/ None,
         InitialContextInjection::DoNotInject,
         compaction_metadata,
+        guidance,
     )
     .await
 }
@@ -146,6 +155,7 @@ async fn run_remote_compact_task_inner(
     client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
+    guidance: Option<&CompactionGuidance>,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
     let trigger = compaction_metadata.trigger();
@@ -187,7 +197,10 @@ async fn run_remote_compact_task_inner(
         fallback_step_context,
         client_session,
         initial_context_injection,
-        compaction_metadata,
+        RemoteCompactionParameters {
+            metadata: compaction_metadata,
+            guidance,
+        },
         &mut analytics_details,
     )
     .await;
@@ -225,9 +238,10 @@ async fn run_remote_compact_task_inner_impl(
     fallback_step_context: Option<&Arc<StepContext>>,
     mut client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
-    compaction_metadata: CompactionTurnMetadata,
+    parameters: RemoteCompactionParameters<'_>,
     analytics_details: &mut CompactionAnalyticsDetails,
 ) -> CodexResult<()> {
+    let RemoteCompactionParameters { metadata, guidance } = parameters;
     let turn_context = &step_context.turn;
     let context_compaction_item = ContextCompactionItem::new();
     let compaction_id = context_compaction_item.id.clone();
@@ -246,8 +260,9 @@ async fn run_remote_compact_task_inner_impl(
         step_context,
         client_session.as_deref_mut(),
         &compaction_trace,
-        compaction_metadata,
+        metadata,
         analytics_details,
+        guidance,
     )
     .await;
     let (attempt, compaction_turn_context) = match attempt {
@@ -274,16 +289,17 @@ async fn run_remote_compact_task_inner_impl(
                 fallback_step_context,
                 client_session,
                 &fallback_compaction_trace,
-                compaction_metadata,
+                metadata,
                 analytics_details,
+                guidance,
             )
             .await;
             record_model_fallback(
                 &sess.services.session_telemetry,
                 turn_context.model_info().slug.as_str(),
                 fallback_turn_context.model_info().slug.as_str(),
-                compaction_metadata.reason(),
-                compaction_metadata.implementation(),
+                metadata.reason(),
+                metadata.implementation(),
                 fallback_result.as_ref().err(),
             );
             match fallback_result {

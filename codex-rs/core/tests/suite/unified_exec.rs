@@ -307,6 +307,42 @@ async fn exec_command_hides_and_rejects_login_when_disabled() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_command_rejects_corrupted_model_text_before_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness =
+        TestCodexHarness::with_auto_env_builder(test_codex().with_model("gpt-5.4")).await?;
+    let call_id = "exec-command-corrupted-text";
+    let arguments = json!({
+        "cmd": "git commit -m 'validationcodes andтобы'",
+    });
+    mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "exec_command", &serde_json::to_string(&arguments)?),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "regenerated safely"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    harness.submit("commit the change").await?;
+
+    assert_eq!(
+        harness.function_call_stdout(call_id).await,
+        "exec_command rejected before execution because the model-generated command contains text-integrity signals (mixed_alphabetic_scripts); regenerate it from verified source text instead of reusing the corrupted output"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_command_does_not_expose_configured_noise_auth_token() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(

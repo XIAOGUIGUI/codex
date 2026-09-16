@@ -341,6 +341,10 @@ pub struct ConfigToml {
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
 
+    /// Privacy-safe local logging for Windows and custom-provider compatibility failures.
+    #[serde(default)]
+    pub compatibility_diagnostics: codex_diagnostics::CompatibilityDiagnosticsConfig,
+
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: Option<UriBasedFileOpener>,
@@ -977,6 +981,35 @@ mod tests {
 
     const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
     const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    #[test]
+    fn compatibility_diagnostics_accepts_an_external_absolute_directory() {
+        let directory = std::env::temp_dir().join("codex-compatibility-diagnostics");
+        let config: ConfigToml = toml::from_str(&format!(
+            r#"
+[compatibility_diagnostics]
+enabled = true
+directory = '{}'
+retention_days = 30
+max_total_mib = 256
+"#,
+            directory.display()
+        ))
+        .expect("compatibility diagnostics config should deserialize");
+
+        assert_eq!(
+            config.compatibility_diagnostics,
+            codex_diagnostics::CompatibilityDiagnosticsConfig {
+                enabled: true,
+                directory: Some(
+                    codex_utils_absolute_path::AbsolutePathBuf::try_from(directory)
+                        .expect("temporary directory should be absolute"),
+                ),
+                retention_days: Some(30),
+                max_total_mib: Some(256),
+            }
+        );
+    }
 
     #[test]
     fn forced_chatgpt_workspace_id_accepts_single_string() {

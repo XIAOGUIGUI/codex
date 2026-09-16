@@ -585,6 +585,9 @@ pub struct AdditionalContextEntry {
     pub kind: AdditionalContextKind,
 }
 
+/// Maximum UTF-8 byte length accepted for manual compaction guidance.
+pub const MAX_COMPACTION_GUIDANCE_BYTES: usize = 2_048;
+
 /// Submission operation
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
@@ -728,6 +731,9 @@ pub enum Op {
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
+
+    /// Request compaction while prioritizing the supplied bounded retention guidance.
+    CompactWithGuidance { guidance: String },
 
     /// Set whether the thread remains eligible for memory generation.
     ///
@@ -952,7 +958,7 @@ impl Op {
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
             Self::RefreshMcpServers => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
-            Self::Compact => "compact",
+            Self::Compact | Self::CompactWithGuidance { .. } => "compact",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
@@ -1582,6 +1588,7 @@ pub enum HookEventName {
     SessionStart,
     SessionEnd,
     UserPromptSubmit,
+    UserInputRequest,
     SubagentStart,
     SubagentStop,
     Stop,

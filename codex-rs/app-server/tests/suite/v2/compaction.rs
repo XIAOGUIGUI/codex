@@ -33,6 +33,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::MAX_COMPACTION_GUIDANCE_BYTES;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -264,7 +265,7 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
         responses::ev_assistant_message("followup", "FINAL_REPLY"),
         responses::ev_completed_with_tokens("followup", /*total_tokens*/ 120),
     ]);
-    let _responses = responses::mount_sse_sequence(&server, vec![seed, sse, followup]).await;
+    let responses = responses::mount_sse_sequence(&server, vec![seed, sse, followup]).await;
 
     let codex_home = TempDir::new()?;
     let initial_cwd = TempDir::new()?;
@@ -308,6 +309,7 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     let compact_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: thread_id.clone(),
+            guidance: Some("preserve the updated working directory".to_string()),
         })
         .await?;
     let _: ThreadCompactStartResponse =
@@ -321,6 +323,17 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     .await??;
     let completed = wait_for_context_compaction_completed(&mut mcp).await?;
     wait_for_turn_completed(&mut mcp, &started.turn_id).await?;
+
+    let requests = responses.requests();
+    let compact_prompt = requests[1]
+        .input()
+        .iter()
+        .filter_map(|item| item.get("content"))
+        .flat_map(|content| content.as_array().into_iter().flatten())
+        .filter_map(|content| content.get("text").and_then(serde_json::Value::as_str))
+        .collect::<String>();
+    assert!(compact_prompt.contains("<compaction_guidance>"));
+    assert!(compact_prompt.contains("preserve the updated working directory"));
 
     let ThreadItem::ContextCompaction { id: started_id } = started.item else {
         unreachable!("started item should be context compaction");
@@ -393,6 +406,7 @@ async fn thread_compact_start_rejects_invalid_thread_id() -> Result<()> {
     let request_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: "not-a-thread-id".to_string(),
+            guidance: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
@@ -403,6 +417,37 @@ async fn thread_compact_start_rejects_invalid_thread_id() -> Result<()> {
 
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert!(error.error.message.contains("invalid thread id"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_compact_start_rejects_oversized_guidance() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    compaction_config(&server.uri(), AUTO_COMPACT_LIMIT).write(codex_home.path())?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_thread_compact_start_request(ThreadCompactStartParams {
+            thread_id: "not-used-for-invalid-guidance".to_string(),
+            guidance: Some("a".repeat(MAX_COMPACTION_GUIDANCE_BYTES + 1)),
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(error.error.message.contains("compaction guidance exceeds"));
 
     Ok(())
 }
@@ -423,6 +468,7 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
     let request_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+            guidance: None,
         })
         .await?;
     let error: JSONRPCError = timeout(

@@ -4,6 +4,7 @@ mod parser;
 mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
+mod structured_file_change;
 mod text_file;
 
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WriteDisposition;
 use codex_exec_server::WriteFileOptions;
 use codex_utils_path_uri::PathUri;
 use codex_utils_path_uri::PathUriParseError;
@@ -27,6 +29,11 @@ use parser::ParseError::*;
 pub use parser::UpdateFileChunk;
 pub use parser::parse_patch;
 pub use streaming_parser::StreamingPatchParser;
+pub use structured_file_change::StructuredFileMutation;
+pub use structured_file_change::StructuredFileMutationKind;
+pub use structured_file_change::apply_structured_file_mutation;
+pub use structured_file_change::prepare_structured_edit;
+pub use structured_file_change::prepare_structured_write;
 use thiserror::Error;
 
 use file_update::AppliedPatch;
@@ -63,9 +70,9 @@ pub const CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR: &str =
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ApplyPatchFileUpdateMode {
     /// Preserve the historical behavior of normalizing updated files to LF.
-    #[default]
     NormalizeToLf,
     /// Preserve existing line endings and use the file's preferred ending for new lines.
+    #[default]
     PreserveLineEndings,
 }
 
@@ -90,8 +97,9 @@ impl Default for ApplyPatchOptions {
 #[doc(hidden)]
 pub fn apply_patch_file_update_mode_from_env() -> ApplyPatchFileUpdateMode {
     match std::env::var(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR).as_deref() {
-        Ok("1") => ApplyPatchFileUpdateMode::PreserveLineEndings,
-        _ => ApplyPatchFileUpdateMode::NormalizeToLf,
+        Ok("0") => ApplyPatchFileUpdateMode::NormalizeToLf,
+        Ok("1") | Err(_) => ApplyPatchFileUpdateMode::PreserveLineEndings,
+        Ok(_) => ApplyPatchFileUpdateMode::default(),
     }
 }
 
@@ -112,6 +120,12 @@ pub enum ApplyPatchError {
         "patch detected without explicit call to apply_patch. Rerun as [\"apply_patch\", \"<patch>\"]"
     )]
     ImplicitInvocation,
+    /// The patch was valid but would not change any file contents.
+    #[error("No files were modified.")]
+    NoFilesModified,
+    /// A structured edit or write request could not be applied safely.
+    #[error("{0}")]
+    StructuredFileMutation(String),
 }
 
 impl From<std::io::Error> for ApplyPatchError {
@@ -520,6 +534,7 @@ async fn apply_hunks_to_files(
                         &path_uri,
                         contents.clone().into_bytes(),
                         follow_symlinks,
+                        WriteDisposition::Overwrite,
                         sandbox,
                     )
                     .await
@@ -632,6 +647,7 @@ async fn apply_hunks_to_files(
                             &dest_uri,
                             new_contents.clone().into_bytes(),
                             follow_symlinks,
+                            WriteDisposition::Overwrite,
                             sandbox,
                         )
                         .await
@@ -691,11 +707,17 @@ async fn apply_hunks_to_files(
                     };
                     modified.push(affected_path);
                 } else {
+                    if new_contents == original_contents {
+                        continue;
+                    }
                     try_write!(
                         fs.write_file(
                             &path_uri,
                             new_contents.clone().into_bytes(),
-                            WriteFileOptions { follow_symlinks },
+                            WriteFileOptions {
+                                follow_symlinks,
+                                disposition: WriteDisposition::Overwrite,
+                            },
                             sandbox,
                         )
                         .await
@@ -717,6 +739,9 @@ async fn apply_hunks_to_files(
                 }
             }
         }
+    }
+    if added.is_empty() && modified.is_empty() && deleted.is_empty() {
+        anyhow::bail!("No files were modified.");
     }
     Ok(AffectedPaths {
         added,
@@ -803,13 +828,17 @@ async fn write_file_with_missing_parent_retry(
     path: &PathUri,
     contents: Vec<u8>,
     follow_symlinks: bool,
+    disposition: WriteDisposition,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> anyhow::Result<()> {
     match fs
         .write_file(
             path,
             contents.clone(),
-            WriteFileOptions { follow_symlinks },
+            WriteFileOptions {
+                follow_symlinks,
+                disposition,
+            },
             sandbox,
         )
         .await
@@ -836,7 +865,10 @@ async fn write_file_with_missing_parent_retry(
             fs.write_file(
                 path,
                 contents,
-                WriteFileOptions { follow_symlinks },
+                WriteFileOptions {
+                    follow_symlinks,
+                    disposition,
+                },
                 sandbox,
             )
             .await

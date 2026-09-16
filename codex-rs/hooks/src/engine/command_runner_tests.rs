@@ -34,6 +34,7 @@ use super::ConfiguredHandler;
 use super::MAX_CONCURRENT_ASYNC_HOOKS;
 use super::build_command;
 use super::run_command;
+use super::run_command_bounded;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 
 #[cfg(windows)]
@@ -126,6 +127,78 @@ async fn fast_exiting_hook_preserves_stdout_when_stdin_is_not_consumed() {
     assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout.trim(), "hook-ran");
     assert_eq!(result.error, None);
+}
+
+#[tokio::test]
+async fn bounded_command_output_rejects_oversized_stdout() {
+    let temp = tempdir().expect("create temp dir");
+    let source_path = AbsolutePathBuf::try_from(temp.path().join("hooks.json"))
+        .expect("absolute hook configuration path");
+    let command = "echo oversized";
+    let env = HashMap::new();
+    let handler = ConfiguredHandler {
+        builtin: false,
+        event_name: HookEventName::UserInputRequest,
+        matcher: None,
+        timeout_sec: 10,
+        status_message: None,
+        additional_context_limit: Default::default(),
+        source_path: source_path.into(),
+        source: HookSource::User,
+        display_order: 0,
+        kind: ConfiguredHandlerKind::Command {
+            command: command.to_string(),
+            r#async: false,
+            env: env.clone(),
+        },
+    };
+    let (runtime, _result_receiver) = runtime();
+
+    let result = run_command_bounded(&runtime, &handler, command, &env, "{}", temp.path(), 2).await;
+
+    assert_eq!(result.exit_code, None);
+    assert_eq!(result.stdout, "");
+    assert_eq!(result.stderr, "");
+    assert_eq!(
+        result.error.as_deref(),
+        Some("hook output exceeded the configured limit")
+    );
+}
+
+#[tokio::test]
+async fn bounded_command_output_stops_at_the_hard_limit() {
+    let temp = tempdir().expect("create temp dir");
+    let source_path = AbsolutePathBuf::try_from(temp.path().join("hooks.json"))
+        .expect("absolute hook configuration path");
+    let command = "echo output-over-limit";
+    let env = HashMap::new();
+    let handler = ConfiguredHandler {
+        builtin: false,
+        event_name: HookEventName::UserInputRequest,
+        matcher: None,
+        timeout_sec: 10,
+        status_message: None,
+        additional_context_limit: Default::default(),
+        source_path: source_path.into(),
+        source: HookSource::User,
+        display_order: 0,
+        kind: ConfiguredHandlerKind::Command {
+            command: command.to_string(),
+            r#async: false,
+            env: env.clone(),
+        },
+    };
+    let (runtime, _result_receiver) = runtime();
+
+    let result = run_command_bounded(&runtime, &handler, command, &env, "{}", temp.path(), 4).await;
+
+    assert_eq!(result.exit_code, None);
+    assert_eq!(result.stdout, "");
+    assert_eq!(result.stderr, "");
+    assert_eq!(
+        result.error.as_deref(),
+        Some("hook output exceeded the configured limit")
+    );
 }
 
 #[tokio::test]

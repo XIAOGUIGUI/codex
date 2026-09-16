@@ -69,12 +69,15 @@ pub(crate) fn inject_permission_profile_env(
 /// apply-patch path reads the feature directly.
 pub fn inject_apply_patch_env(env: &mut HashMap<String, String>, features: &Features) {
     env.retain(|key, _| !key.eq_ignore_ascii_case(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR));
-    if features.enabled(Feature::ApplyPatchPreserveLineEndings) {
-        env.insert(
-            CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
-            "1".to_string(),
-        );
-    }
+    env.insert(
+        CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+        if features.enabled(Feature::ApplyPatchPreserveLineEndings) {
+            "1"
+        } else {
+            "0"
+        }
+        .to_string(),
+    );
 }
 
 #[cfg(all(test, target_os = "windows"))]

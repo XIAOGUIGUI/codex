@@ -3,6 +3,8 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadFileOptions;
 use codex_utils_path_uri::PathUri;
 use similar::TextDiff;
+use std::cmp::Reverse;
+use std::io;
 
 use crate::ApplyPatchError;
 use crate::ApplyPatchFileUpdateMode;
@@ -31,8 +33,8 @@ pub(crate) async fn derive_new_contents_from_chunks(
     follow_symlinks: bool,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs
-        .read_file_text(path, ReadFileOptions { follow_symlinks }, sandbox)
+    let original_bytes = fs
+        .read_file(path, ReadFileOptions { follow_symlinks }, sandbox)
         .await
         .map_err(|err| {
             ApplyPatchError::IoError(IoError {
@@ -43,11 +45,37 @@ pub(crate) async fn derive_new_contents_from_chunks(
                 source: err,
             })
         })?;
+    let encoding = if original_bytes.starts_with(&[0xff, 0xfe]) {
+        "UTF-16 little-endian"
+    } else if original_bytes.starts_with(&[0xfe, 0xff]) {
+        "UTF-16 big-endian"
+    } else {
+        "a non-UTF-8 encoding"
+    };
+    let original_contents = String::from_utf8(original_bytes).map_err(|err| {
+        ApplyPatchError::IoError(IoError {
+            context: format!(
+                "Failed to read file to update {}",
+                path.inferred_native_path_string()
+            ),
+            source: io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "detected {encoding}; apply_patch supports UTF-8 with or without a BOM only: {err}"
+                ),
+            ),
+        })
+    })?;
+    let (contents_to_update, has_utf8_bom) = original_contents
+        .strip_prefix('\u{feff}')
+        .map_or((original_contents.as_str(), false), |contents| {
+            (contents, true)
+        });
 
     let path_text = path.inferred_native_path_string();
-    let new_contents = match update_file_mode {
+    let updated_contents = match update_file_mode {
         ApplyPatchFileUpdateMode::NormalizeToLf => {
-            let mut original_lines = original_contents
+            let mut original_lines = contents_to_update
                 .split('\n')
                 .map(String::from)
                 .collect::<Vec<_>>();
@@ -67,13 +95,18 @@ pub(crate) async fn derive_new_contents_from_chunks(
             new_lines.join("\n")
         }
         ApplyPatchFileUpdateMode::PreserveLineEndings => {
-            let mut source_file = SourceFile::parse(&original_contents);
+            let mut source_file = SourceFile::parse(contents_to_update);
             let original_lines = source_file.line_texts();
             let replacements =
                 compute_replacements(&original_lines, &path_text, chunks, update_file_mode)?;
             source_file.apply_replacements(&replacements);
             source_file.into_contents()
         }
+    };
+    let new_contents = if has_utf8_bom {
+        format!("\u{feff}{updated_contents}")
+    } else {
+        updated_contents
     };
     Ok(AppliedPatch {
         original_contents,
@@ -106,9 +139,17 @@ fn compute_replacements(
             ) {
                 line_index = idx + 1;
             } else {
-                return Err(ApplyPatchError::ComputeReplacements(format!(
-                    "Failed to find context '{ctx_line}' in {path}"
-                )));
+                return Err(ApplyPatchError::ComputeReplacements(
+                    format_sequence_search_failure(
+                        format!(
+                            "Failed to find context {} in {path}",
+                            format_line_for_diagnostic(ctx_line)
+                        ),
+                        original_lines,
+                        std::slice::from_ref(ctx_line),
+                        line_index,
+                    ),
+                ));
             }
         }
 
@@ -207,17 +248,118 @@ fn compute_replacements(
             }
             line_index = start_idx + pattern.len();
         } else {
-            return Err(ApplyPatchError::ComputeReplacements(format!(
-                "Failed to find expected lines in {}:\n{}",
-                path,
-                chunk.old_lines.join("\n"),
-            )));
+            return Err(ApplyPatchError::ComputeReplacements(
+                format_sequence_search_failure(
+                    format!("Failed to find expected lines in {path}"),
+                    original_lines,
+                    pattern,
+                    line_index,
+                ),
+            ));
         }
     }
 
     replacements.sort_by_key(|(index, _, _)| *index);
 
     Ok(replacements)
+}
+
+const MAX_DIAGNOSTIC_LINE_CHARS: usize = 160;
+
+fn format_sequence_search_failure(
+    header: String,
+    lines: &[String],
+    pattern: &[String],
+    search_start: usize,
+) -> String {
+    let search_line = search_start.saturating_add(1);
+    let Some((candidate_start, whitespace_matches)) = (search_start..lines.len())
+        .map(|candidate_start| {
+            let candidate = &lines[candidate_start..];
+            let comparable_lines = pattern.len().min(candidate.len());
+            let whitespace_matches = pattern
+                .iter()
+                .zip(candidate)
+                .filter(|(expected, actual)| expected.trim() == actual.trim())
+                .count();
+            let exact_matches = pattern
+                .iter()
+                .zip(candidate)
+                .filter(|(expected, actual)| expected == actual)
+                .count();
+            let matching_prefix = pattern
+                .iter()
+                .zip(candidate)
+                .take(comparable_lines)
+                .take_while(|(expected, actual)| expected.trim() == actual.trim())
+                .count();
+            (
+                candidate_start,
+                whitespace_matches,
+                exact_matches,
+                matching_prefix,
+            )
+        })
+        .max_by_key(
+            |(candidate_start, whitespace_matches, exact_matches, matching_prefix)| {
+                (
+                    *whitespace_matches,
+                    *exact_matches,
+                    *matching_prefix,
+                    Reverse(*candidate_start),
+                )
+            },
+        )
+        .map(
+            |(candidate_start, whitespace_matches, _exact_matches, _matching_prefix)| {
+                (candidate_start, whitespace_matches)
+            },
+        )
+    else {
+        return format!(
+            "{header}\nSearch started at line {search_line}, but the file has no candidate lines at or after that position."
+        );
+    };
+
+    let mismatch_index = pattern
+        .iter()
+        .zip(&lines[candidate_start..])
+        .position(|(expected, actual)| expected.trim_end() != actual.trim_end())
+        .unwrap_or_else(|| pattern.len().min(lines.len() - candidate_start));
+    let expected = pattern
+        .get(mismatch_index)
+        .map_or("<end of pattern>", String::as_str);
+    let actual = lines
+        .get(candidate_start + mismatch_index)
+        .map_or("<end of file>", String::as_str);
+    let candidate_line = candidate_start + 1;
+    let mismatch_line = candidate_start + mismatch_index + 1;
+
+    format!(
+        "{header}\nSearch started at line {search_line}. Closest candidate starts at line {candidate_line} and matches {whitespace_matches}/{} lines when surrounding whitespace is ignored.\nFirst mismatch at line {mismatch_line}:\nexpected: {}\nactual:   {}",
+        pattern.len(),
+        format_line_for_diagnostic(expected),
+        format_line_for_diagnostic(actual),
+    )
+}
+
+fn format_line_for_diagnostic(line: &str) -> String {
+    let mut rendered = String::new();
+    let mut chars = line.chars();
+    for character in chars.by_ref().take(MAX_DIAGNOSTIC_LINE_CHARS) {
+        match character {
+            ' ' => rendered.push('·'),
+            '\t' => rendered.push_str("→\\t"),
+            '\r' => rendered.push_str("\\r"),
+            '\n' => rendered.push_str("\\n"),
+            character if character.is_control() => rendered.extend(character.escape_default()),
+            character => rendered.push(character),
+        }
+    }
+    if chars.next().is_some() {
+        rendered.push('…');
+    }
+    format!("`{rendered}`")
 }
 
 /// Apply the `(start_index, old_len, new_lines)` replacements to `original_lines`,

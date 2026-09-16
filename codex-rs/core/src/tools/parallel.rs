@@ -70,6 +70,15 @@ impl ToolCallRuntime {
             .create_diff_consumer(tool_name)
     }
 
+    pub(crate) fn model_argument_bytes_limit(
+        &self,
+        tool_name: &codex_tools::ToolName,
+    ) -> Option<usize> {
+        self.step_context
+            .tool_router
+            .model_argument_bytes_limit(tool_name)
+    }
+
     #[instrument(level = "trace", skip_all)]
     pub(crate) fn handle_tool_call(
         self,
@@ -216,7 +225,7 @@ impl ToolCallRuntime {
         FunctionCallError::Fatal(format!("tool task failed to receive: {err:?}"))
     }
 
-    fn failure_response(call: ToolCall, err: FunctionCallError) -> ResponseInputItem {
+    pub(crate) fn failure_response(call: ToolCall, err: FunctionCallError) -> ResponseInputItem {
         let message = err.to_string();
         match call.payload {
             ToolPayload::ToolSearch { .. } => ResponseInputItem::ToolSearchOutput {

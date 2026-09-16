@@ -18,3 +18,18 @@ fn error_completion_message_stays_below_manual_review_threshold() {
     assert!(approx_token_count(&message) < COMPLETION_MESSAGE_MAX_TOKENS);
     assert!(message.contains(ERROR_NEXT_ACTION));
 }
+
+#[test]
+fn successful_completion_message_is_bounded_and_keeps_agent_identity() {
+    let message = format_inter_agent_completion_message(
+        AgentPath::root(),
+        AgentPath::try_from("/root/explore").expect("valid agent path"),
+        &AgentStatus::Completed(Some("finding ".repeat(4_000))),
+    )
+    .expect("completed status should produce a completion message");
+
+    assert!(approx_token_count(&message) < COMPLETION_MESSAGE_MAX_TOKENS);
+    assert!(message.contains("Task name: /root"));
+    assert!(message.contains("Sender: /root/explore"));
+    assert!(message.contains("truncated"));
+}

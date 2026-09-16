@@ -491,7 +491,14 @@ async fn amazon_bedrock_manual_compaction_uses_v2_responses_endpoint() -> Result
     .await;
 
     harness.test().submit_turn("before compact").await?;
-    harness.test().codex.submit(Op::Compact).await?;
+    let guidance = "preserve the Windows overlay verification evidence";
+    harness
+        .test()
+        .codex
+        .submit(Op::CompactWithGuidance {
+            guidance: guidance.to_string(),
+        })
+        .await?;
     wait_for_turn_complete(&harness.test().codex).await;
     harness.test().submit_turn("after compact").await?;
 
@@ -520,6 +527,20 @@ async fn amazon_bedrock_manual_compaction_uses_v2_responses_endpoint() -> Result
     assert_eq!(
         compact_request.inputs_of_type("compaction_trigger").len(),
         1
+    );
+    let compact_body = compact_request.body_json();
+    let compact_instructions = compact_body["instructions"]
+        .as_str()
+        .expect("compact instructions should be a string");
+    assert!(compact_instructions.contains("<compaction_guidance>"));
+    assert!(compact_instructions.contains(guidance));
+    assert!(compact_instructions.contains("</compaction_guidance>"));
+    assert!(
+        compact_request
+            .input()
+            .iter()
+            .all(|item| !item.to_string().contains(guidance)),
+        "compaction guidance must not be persisted as a history item"
     );
     assert!(response_requests[2].input().iter().any(|item| {
         item["type"] == "compaction"

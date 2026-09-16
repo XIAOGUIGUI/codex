@@ -55,4 +55,24 @@ fn snapshot_includes_process_memory_and_registers_gauges_once() {
     );
     #[cfg(not(target_os = "macos"))]
     assert_eq!(diagnostics.process.physical_footprint_bytes, None);
+    #[cfg(target_os = "windows")]
+    {
+        assert!(
+            diagnostics
+                .process
+                .private_commit_bytes
+                .is_some_and(|bytes| bytes > 0)
+        );
+        assert!(
+            diagnostics
+                .process
+                .peak_private_commit_bytes
+                .is_some_and(|bytes| bytes > 0)
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert_eq!(diagnostics.process.private_commit_bytes, None);
+        assert_eq!(diagnostics.process.peak_private_commit_bytes, None);
+    }
 }

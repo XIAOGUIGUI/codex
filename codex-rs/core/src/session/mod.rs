@@ -229,6 +229,9 @@ mod mcp_prewarm;
 mod mcp_refresh;
 mod mcp_runtime;
 pub(crate) mod multi_agents;
+#[cfg(test)]
+#[path = "multi_agents_tests.rs"]
+mod multi_agents_tests;
 mod realtime_history;
 mod review;
 mod rollout_budget;
@@ -1855,6 +1858,15 @@ impl Session {
             .clone()
     }
 
+    pub(crate) async fn dynamic_tools(&self) -> Vec<DynamicToolSpec> {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .dynamic_tools
+            .clone()
+    }
+
     pub(crate) async fn user_instructions(&self) -> Option<codex_extension_api::Instructions> {
         self.services.agents_md_manager.user_instructions()
     }
@@ -2962,6 +2974,29 @@ impl Session {
         args: RequestUserInputArgs,
     ) -> Option<RequestUserInputResponse> {
         let _elicitation = self.services.elicitations.register();
+        let hook_outcome = self
+            .hooks()
+            .run_user_input_request(codex_hooks::UserInputRequestRequest {
+                session_id: self.session_id().into(),
+                turn_id: turn_context.sub_id.clone(),
+                #[allow(deprecated)]
+                cwd: turn_context.cwd.to_path_buf(),
+                transcript_path: self.hook_transcript_path().await,
+                call_id: call_id.clone(),
+                questions: args.questions.clone(),
+                is_blocking: args.is_blocking,
+            })
+            .await;
+        crate::hook_runtime::emit_hook_completed_events(
+            self,
+            turn_context,
+            hook_outcome.hook_events,
+        )
+        .await;
+        if hook_outcome.response.is_some() {
+            return hook_outcome.response;
+        }
+
         let sub_id = turn_context.sub_id.clone();
         let (tx_response, rx_response) = oneshot::channel();
         let event_id = sub_id.clone();

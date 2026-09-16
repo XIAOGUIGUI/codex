@@ -24,6 +24,11 @@ const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
 
+#[cfg(windows)]
+fn should_create_arg0_alias(filename: &str, packaged_apply_patch_available: bool) -> bool {
+    filename != APPLY_PATCH_ARG0 || !packaged_apply_patch_available
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
     /// Stable path to the current Codex executable for child re-execs.
@@ -158,10 +163,23 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     // before creating any threads/the Tokio runtime.
     load_dotenv();
 
+    let install_context = InstallContext::current();
+    #[cfg(windows)]
+    let packaged_apply_patch_available = install_context
+        .package_layout
+        .as_ref()
+        .and_then(|layout| layout.path_dir.as_ref())
+        .is_some_and(|path_dir| path_dir.join("apply_patch.exe").is_file());
     let (path_entry_guard, updated_path_env_var) = prepare_path_env_var_with_aliases(
-        InstallContext::current(),
+        install_context,
         std::env::var_os("PATH"),
-        prepare_path_entry_for_codex_aliases,
+        |existing_path| {
+            prepare_path_entry_for_codex_aliases(
+                existing_path,
+                #[cfg(windows)]
+                packaged_apply_patch_available,
+            )
+        },
     );
     if let Some(updated_path_env_var) = updated_path_env_var {
         // It is safe to call set_var() because our process is single-threaded at
@@ -337,6 +355,7 @@ where
 /// IMPORTANT: Callers must update PATH before multiple threads are spawned.
 fn prepare_path_entry_for_codex_aliases(
     existing_path: Option<OsString>,
+    #[cfg(windows)] packaged_apply_patch_available: bool,
 ) -> std::io::Result<(Arg0PathEntryGuard, OsString)> {
     let codex_home = find_codex_home()?;
     #[cfg(not(debug_assertions))]
@@ -392,6 +411,10 @@ fn prepare_path_entry_for_codex_aliases(
         #[cfg(unix)]
         EXECVE_WRAPPER_ARG0,
     ] {
+        #[cfg(windows)]
+        if !should_create_arg0_alias(filename, packaged_apply_patch_available) {
+            continue;
+        }
         let exe = std::env::current_exe()?;
 
         #[cfg(unix)]
@@ -645,6 +668,23 @@ mod tests {
             ),
             r"D:\Tools\codex.exe",
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn packaged_apply_patch_executable_is_not_shadowed_by_batch_alias() {
+        assert!(!super::should_create_arg0_alias(
+            super::APPLY_PATCH_ARG0,
+            /*packaged_apply_patch_available*/ true,
+        ));
+        assert!(super::should_create_arg0_alias(
+            super::APPLY_PATCH_ARG0,
+            /*packaged_apply_patch_available*/ false,
+        ));
+        assert!(super::should_create_arg0_alias(
+            super::MISSPELLED_APPLY_PATCH_ARG0,
+            /*packaged_apply_patch_available*/ true,
+        ));
     }
 
     #[test]

@@ -17,6 +17,7 @@ use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -35,6 +36,7 @@ use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::fs;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
@@ -211,6 +213,109 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
             }
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_input_request_hook_answers_without_native_prompt() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            let script_path = home.join("user_input_request_hook.py");
+            let input_path = home.join("user_input_request_input.json");
+            fs::write(
+                &script_path,
+                format!(
+                    r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+Path(r"{input_path}").write_text(json.dumps(payload), encoding="utf-8")
+print(json.dumps({{"answers": {{"confirm_path": {{"answers": ["hook answer"]}}}}}}))
+"#,
+                    input_path = input_path.display(),
+                ),
+            )
+            .expect("write user input hook script");
+            let python = if cfg!(windows) { "python" } else { "python3" };
+            let hooks = json!({
+                "hooks": {
+                    "UserInputRequest": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!("{python} {}", script_path.display()),
+                            "timeout": 10
+                        }]
+                    }]
+                }
+            });
+            fs::write(home.join("hooks.json"), hooks.to_string())
+                .expect("write user input hooks config");
+        })
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .expect("test config should allow request_user_input in default mode");
+        });
+    let test = builder.build(&server).await?;
+    let call_id = "hook-user-input-call";
+    let request_args = json!({
+        "questions": [{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed?",
+            "options": [{
+                "label": "Yes",
+                "description": "Continue."
+            }]
+        }]
+    })
+    .to_string();
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-hook-1"),
+            ev_function_call(call_id, "request_user_input", &request_args),
+            ev_completed("resp-hook-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-hook-1", "thanks"),
+            ev_completed("resp-hook-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("ask me before continuing").await?;
+
+    let request = second_mock.single_request();
+    let output = call_output(&request, call_id);
+    assert_eq!(
+        serde_json::from_str::<Value>(&output)
+            .unwrap_or_else(|error| panic!("parse hook answer {output:?}: {error}")),
+        json!({
+            "answers": {
+                "confirm_path": { "answers": ["hook answer"] }
+            }
+        })
+    );
+    let hook_input: Value = serde_json::from_str(&fs::read_to_string(
+        test.codex_home_path().join("user_input_request_input.json"),
+    )?)?;
+    assert_eq!(hook_input["hook_event_name"], "UserInputRequest");
+    assert_eq!(hook_input["tool_name"], "request_user_input");
+    assert_eq!(hook_input["call_id"], call_id);
+    assert_eq!(hook_input["isBlocking"], false);
+    assert_eq!(hook_input["questions"][0]["id"], "confirm_path");
 
     Ok(())
 }

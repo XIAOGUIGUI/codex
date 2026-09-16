@@ -99,7 +99,7 @@ fn test_apply_patch_cli_rejects_overlapping_end_of_file_chunks() -> anyhow::Resu
     run_apply_patch_in_dir(tmp.path(), patch)?
         .failure()
         .stderr(format!(
-            "Failed to find expected lines in {}:\none\n",
+            "Failed to find expected lines in {}\nSearch started at line 2, but the file has no candidate lines at or after that position.\n",
             expected_target_path.display()
         ));
 
@@ -116,7 +116,7 @@ fn test_apply_patch_cli_allows_overlapping_eof_chunks_in_legacy_mode() -> anyhow
     let patch = "*** Begin Patch\n*** Update File: overlapping.txt\n@@\n-one\n+first\n@@\n-one\n+second\n*** End of File\n*** End Patch";
 
     Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?)
-        .env_remove(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR)
+        .env(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR, "0")
         .arg(patch)
         .current_dir(tmp.path())
         .assert()
@@ -152,14 +152,14 @@ fn test_apply_patch_cli_appends_after_trailing_blank_crlf_line() -> anyhow::Resu
 }
 
 #[test]
-fn test_apply_patch_cli_uses_legacy_line_handling_without_rollout_env() -> anyhow::Result<()> {
+fn test_apply_patch_cli_uses_legacy_line_handling_with_explicit_opt_out() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let target_path = tmp.path().join("crlf.txt");
     fs::write(&target_path, b"one\r\n")?;
     let patch = "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-one\n+uno\n*** End Patch";
 
     Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?)
-        .env_remove(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR)
+        .env(CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR, "0")
         .arg(patch)
         .current_dir(tmp.path())
         .assert()
@@ -210,7 +210,7 @@ fn test_apply_patch_cli_preserves_untouched_mixed_line_endings() -> anyhow::Resu
 }
 
 #[test]
-fn test_apply_patch_cli_uses_crlf_for_new_trailing_newline() -> anyhow::Result<()> {
+fn test_apply_patch_cli_preserves_missing_trailing_newline_with_crlf() -> anyhow::Result<()> {
     let patch =
         "*** Begin Patch\n*** Update File: no_trailing_newline.txt\n@@\n-one\n+ONE\n*** End Patch";
 
@@ -218,7 +218,7 @@ fn test_apply_patch_cli_uses_crlf_for_new_trailing_newline() -> anyhow::Result<(
         "no_trailing_newline.txt",
         b"one\r\ntwo",
         patch,
-        b"ONE\r\ntwo\r\n",
+        b"ONE\r\ntwo",
     )
 }
 
@@ -256,6 +256,23 @@ fn test_apply_patch_cli_rejects_empty_patch() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_apply_patch_cli_rejects_noop_update() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let target_path = tmp.path().join("modify.txt");
+    fs::write(&target_path, "line1\nline2\n")?;
+    let patch = "*** Begin Patch\n*** Update File: modify.txt\n@@\n-line2\n+line2\n*** End Patch";
+
+    apply_patch_command(tmp.path())?
+        .arg(patch)
+        .assert()
+        .failure()
+        .stderr("No files were modified.\n");
+
+    assert_eq!(fs::read_to_string(target_path)?, "line1\nline2\n");
+    Ok(())
+}
+
+#[test]
 fn test_apply_patch_cli_reports_missing_context() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let target_path = tmp.path().join("modify.txt");
@@ -267,7 +284,7 @@ fn test_apply_patch_cli_reports_missing_context() -> anyhow::Result<()> {
         .assert()
         .failure()
         .stderr(format!(
-            "Failed to find expected lines in {}:\nmissing\n",
+            "Failed to find expected lines in {}\nSearch started at line 1. Closest candidate starts at line 1 and matches 0/1 lines when surrounding whitespace is ignored.\nFirst mismatch at line 1:\nexpected: `missing`\nactual:   `line1`\n",
             expected_target_path.display()
         ));
     assert_eq!(fs::read_to_string(&target_path)?, "line1\nline2\n");
@@ -396,7 +413,7 @@ fn test_apply_patch_cli_rejects_invalid_hunk_header() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_apply_patch_cli_updates_file_appends_trailing_newline() -> anyhow::Result<()> {
+fn test_apply_patch_cli_updates_file_preserves_missing_trailing_newline() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let target_path = tmp.path().join("no_newline.txt");
     fs::write(&target_path, "no newline at end")?;
@@ -409,8 +426,7 @@ fn test_apply_patch_cli_updates_file_appends_trailing_newline() -> anyhow::Resul
     .stdout("Success. Updated the following files:\nM no_newline.txt\n");
 
     let contents = fs::read_to_string(&target_path)?;
-    assert!(contents.ends_with('\n'));
-    assert_eq!(contents, "first line\nsecond line\n");
+    assert_eq!(contents, "first line\nsecond line");
 
     Ok(())
 }

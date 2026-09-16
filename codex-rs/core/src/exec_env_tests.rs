@@ -50,15 +50,21 @@ fn inject_apply_patch_env_follows_preserve_line_endings_feature() {
     let mut features = Features::with_defaults();
 
     inject_apply_patch_env(&mut env, &features);
-    assert_eq!(env, HashMap::new());
-
-    features.enable(Feature::ApplyPatchPreserveLineEndings);
-    inject_apply_patch_env(&mut env, &features);
     assert_eq!(
         env,
         HashMap::from([(
             CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
             "1".to_string(),
+        )])
+    );
+
+    features.disable(Feature::ApplyPatchPreserveLineEndings);
+    inject_apply_patch_env(&mut env, &features);
+    assert_eq!(
+        env,
+        HashMap::from([(
+            CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
+            "0".to_string(),
         )])
     );
 }

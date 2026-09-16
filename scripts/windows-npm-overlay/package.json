@@ -1,0 +1,48 @@
+{
+  "name": "@chenronggui/codex-win-patch",
+  "version": "0.0.0-dev",
+  "description": "面向 OpenAI Codex CLI 的非官方 Windows x64 补丁。",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XIAOGUIGUI/codex.git",
+    "directory": "scripts/windows-npm-overlay"
+  },
+  "homepage": "https://github.com/XIAOGUIGUI/codex",
+  "bugs": {
+    "url": "https://github.com/XIAOGUIGUI/codex/issues"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "bin": {
+    "codex-win-patch-install": "bin/install.js",
+    "codex-win-patch-restore": "bin/restore.js"
+  },
+  "files": [
+    "bin",
+    "apply_patch.exe",
+    "build-info.json",
+    "codex.exe",
+    "docs",
+    "install.ps1",
+    "LICENSE",
+    "README.md",
+    "restore.ps1",
+    "SHA256SUMS"
+  ],
+  "scripts": {
+    "postinstall": "node bin/install.js --postinstall"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

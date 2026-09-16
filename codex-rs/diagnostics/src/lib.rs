@@ -3,6 +3,27 @@ use std::sync::Once;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+mod compatibility;
+mod text_integrity;
+
+pub use compatibility::CompatibilityDiagnostics;
+pub use compatibility::CompatibilityDiagnosticsConfig;
+pub use compatibility::CompatibilityDiagnosticsContext;
+pub use compatibility::CompatibilityDiagnosticsStatus;
+pub use compatibility::CompatibilityEventInput;
+pub use compatibility::CompatibilityMetrics;
+pub use compatibility::CompatibilityOutcome;
+pub use compatibility::CompatibilityReportOptions;
+pub use compatibility::CompatibilityReportSummary;
+pub use compatibility::TextIntegrityEventInput;
+pub use compatibility::ToolRepresentation;
+pub use compatibility::build_compatibility_report;
+pub use compatibility::compatibility_diagnostics_status;
+pub use compatibility::sha256_file;
+pub use text_integrity::TextIntegrityAnalysis;
+pub use text_integrity::TextIntegrityFlag;
+pub use text_integrity::analyze_text_integrity;
+
 static GAUGES: Mutex<Vec<&'static Gauge>> = Mutex::new(Vec::new());
 
 /// A process-wide gauge that registers itself the first time it is used.
@@ -77,6 +98,10 @@ pub struct ProcessSnapshot {
     pub id: u32,
     pub resident_memory_bytes: Option<u64>,
     pub physical_footprint_bytes: Option<u64>,
+    /// Private committed bytes on Windows. Unavailable on other platforms.
+    pub private_commit_bytes: Option<u64>,
+    /// Peak private committed bytes on Windows. Unavailable on other platforms.
+    pub peak_private_commit_bytes: Option<u64>,
 }
 
 /// Content-free diagnostic values contributed by this process.
@@ -125,6 +150,8 @@ fn process_snapshot() -> ProcessSnapshot {
         id: std::process::id(),
         resident_memory_bytes: Some(usage.ri_resident_size),
         physical_footprint_bytes: Some(usage.ri_phys_footprint),
+        private_commit_bytes: None,
+        peak_private_commit_bytes: None,
     }
 }
 
@@ -144,6 +171,8 @@ fn process_snapshot() -> ProcessSnapshot {
             .zip(page_size)
             .map(|(pages, page_size)| pages.saturating_mul(page_size)),
         physical_footprint_bytes: None,
+        private_commit_bytes: None,
+        peak_private_commit_bytes: None,
     }
 }
 
@@ -188,6 +217,8 @@ fn process_snapshot() -> ProcessSnapshot {
         id: std::process::id(),
         resident_memory_bytes: u64::try_from(counters.working_set_size).ok(),
         physical_footprint_bytes: None,
+        private_commit_bytes: u64::try_from(counters.pagefile_usage).ok(),
+        peak_private_commit_bytes: u64::try_from(counters.peak_pagefile_usage).ok(),
     }
 }
 
@@ -202,6 +233,8 @@ fn empty_process_snapshot() -> ProcessSnapshot {
         id: std::process::id(),
         resident_memory_bytes: None,
         physical_footprint_bytes: None,
+        private_commit_bytes: None,
+        peak_private_commit_bytes: None,
     }
 }
 

@@ -123,6 +123,8 @@ impl RemoteFileSystem {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
                 follow_symlinks: (!options.follow_symlinks).then_some(false),
+                create_new: (options.disposition == crate::WriteDisposition::CreateNew)
+                    .then_some(true),
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await;

@@ -27,6 +27,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -83,6 +84,15 @@ use wiremock::matchers::path_regex;
 
 pub async fn apply_patch_harness() -> Result<TestCodexHarness> {
     apply_patch_harness_with(|builder| builder).await
+}
+
+pub async fn apply_patch_function_harness() -> Result<TestCodexHarness> {
+    apply_patch_harness_with(|builder| {
+        builder.with_model_info_override("gpt-5.5", |model_info| {
+            model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
+        })
+    })
+    .await
 }
 
 async fn apply_patch_harness_with(
@@ -243,6 +253,59 @@ pub async fn mount_apply_patch(
     .await;
 }
 
+pub async fn mount_apply_patch_function(
+    harness: &TestCodexHarness,
+    call_id: &str,
+    patch: &str,
+    assistant_msg: &str,
+) {
+    let arguments = serde_json::to_string(&json!({ "patch": patch }))
+        .expect("apply_patch function arguments should serialize");
+    mount_sse_sequence(
+        harness.server(),
+        apply_patch_responses(call_id, &arguments, assistant_msg, |call_id, arguments| {
+            ev_function_call(call_id, "apply_patch", arguments)
+        }),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_function_call_creates_file_without_outer_markers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_function_harness().await?;
+    let call_id = "apply-patch-function-add-file";
+    let file_name = "function_tool_apply_patch.txt";
+    let patch = format!("*** Add File: {file_name}\n+function tool content");
+    mount_apply_patch_function(&harness, call_id, &patch, "apply_patch done").await;
+
+    harness
+        .test()
+        .submit_turn_with_permission_profile(
+            "apply the patch via a standard function tool",
+            PermissionProfile::Disabled,
+        )
+        .await?;
+
+    let output = harness.function_call_stdout(call_id).await;
+    let expected_pattern = format!(
+        r"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+Success. Updated the following files:
+A {file_name}
+?$"
+    );
+    assert_regex_match(&expected_pattern, output.as_str());
+    assert_eq!(
+        harness.read_file_text(file_name).await?,
+        "function tool content\n"
+    );
+
+    Ok(())
+}
+
 async fn mount_apply_patch_model_output(
     harness: &TestCodexHarness,
     call_id: &str,
@@ -331,9 +394,17 @@ enum CrLfApplyPatchModelOutput {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_normalizes_crlf_without_preserve_line_endings_feature() -> Result<()> {
+async fn apply_patch_normalizes_crlf_when_preserve_line_endings_feature_is_disabled() -> Result<()>
+{
     assert_apply_patch_crlf_update(
-        |builder| builder,
+        |builder| {
+            builder.with_config(|config| {
+                config
+                    .features
+                    .disable(Feature::ApplyPatchPreserveLineEndings)
+                    .expect("feature should be disabled");
+            })
+        },
         CrLfApplyPatchModelOutput::CustomTool,
         "after\n",
     )
@@ -341,16 +412,9 @@ async fn apply_patch_normalizes_crlf_without_preserve_line_endings_feature() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_preserves_crlf_with_preserve_line_endings_feature() -> Result<()> {
+async fn apply_patch_preserves_crlf_by_default() -> Result<()> {
     assert_apply_patch_crlf_update(
-        |builder| {
-            builder.with_config(|config| {
-                config
-                    .features
-                    .enable(Feature::ApplyPatchPreserveLineEndings)
-                    .expect("feature should be enabled");
-            })
-        },
+        |builder| builder,
         CrLfApplyPatchModelOutput::CustomTool,
         "after\r\n",
     )
@@ -358,19 +422,7 @@ async fn apply_patch_preserves_crlf_with_preserve_line_endings_feature() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_heredoc_normalizes_crlf_without_preserve_line_endings_feature()
--> Result<()> {
-    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
-    assert_apply_patch_crlf_update(
-        |builder| builder,
-        CrLfApplyPatchModelOutput::ExecCommandViaHeredoc,
-        "after\n",
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_shell_heredoc_preserves_crlf_with_preserve_line_endings_feature() -> Result<()>
+async fn apply_patch_shell_heredoc_normalizes_crlf_when_preserve_feature_is_disabled() -> Result<()>
 {
     skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
     assert_apply_patch_crlf_update(
@@ -378,10 +430,21 @@ async fn apply_patch_shell_heredoc_preserves_crlf_with_preserve_line_endings_fea
             builder.with_config(|config| {
                 config
                     .features
-                    .enable(Feature::ApplyPatchPreserveLineEndings)
-                    .expect("feature should be enabled");
+                    .disable(Feature::ApplyPatchPreserveLineEndings)
+                    .expect("feature should be disabled");
             })
         },
+        CrLfApplyPatchModelOutput::ExecCommandViaHeredoc,
+        "after\n",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_shell_heredoc_preserves_crlf_by_default() -> Result<()> {
+    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
+    assert_apply_patch_crlf_update(
+        |builder| builder,
         CrLfApplyPatchModelOutput::ExecCommandViaHeredoc,
         "after\r\n",
     )
@@ -490,6 +553,35 @@ async fn apply_patch_cli_preserves_distinct_updated_paths() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_cli_verifies_all_files_before_writing() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness().await?;
+    harness.write_file("first.txt", "first before\n").await?;
+    harness.write_file("second.txt", "second before\n").await?;
+
+    let patch = "*** Begin Patch\n*** Update File: first.txt\n@@\n-first before\n+first after\n*** Update File: second.txt\n@@\n-missing context\n+second after\n*** End Patch";
+    let call_id = "apply-preverify-multiple-files";
+    mount_apply_patch(&harness, call_id, patch, "done").await;
+
+    harness.submit("please apply both updates").await?;
+
+    let out = harness.apply_patch_output(call_id).await;
+    assert!(
+        out.contains("apply_patch verification failed"),
+        "expected verification failure: {out}"
+    );
+    assert!(out.contains("Failed to find expected lines in"));
+    assert_eq!(harness.read_file_text("first.txt").await?, "first before\n");
+    assert_eq!(
+        harness.read_file_text("second.txt").await?,
+        "second before\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_rejects_duplicate_resolved_paths() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -562,7 +654,7 @@ async fn apply_patch_cli_moves_file_to_new_directory() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apply_patch_cli_updates_file_appends_trailing_newline() -> Result<()> {
+async fn apply_patch_cli_updates_file_preserves_missing_trailing_newline() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -578,8 +670,7 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline() -> Result<()> {
     harness.submit("apply newline patch").await?;
 
     let contents = harness.read_file_text("no_newline.txt").await?;
-    assert!(contents.ends_with('\n'));
-    assert_eq!(contents, "first line\nsecond line\n");
+    assert_eq!(contents, "first line\nsecond line");
     Ok(())
 }
 

@@ -260,6 +260,13 @@ impl Hooks {
         self.engine.run_user_prompt_submit(request).await
     }
 
+    pub async fn run_user_input_request(
+        &self,
+        request: crate::UserInputRequestRequest,
+    ) -> crate::UserInputRequestOutcome {
+        self.engine.run_user_input_request(request).await
+    }
+
     pub fn preview_stop(
         &self,
         request: &StopRequest,

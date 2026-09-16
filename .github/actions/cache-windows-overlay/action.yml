@@ -1,0 +1,49 @@
+name: cache-windows-overlay
+description: Cache Cargo downloads and build outputs for one Windows overlay profile.
+inputs:
+  profile:
+    description: Cache namespace separating test and release compilation.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Fingerprint Windows build environment
+      id: environment
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustc_version="$(rustc --version --verbose)"
+        fingerprint="$(printf '%s\n' \
+          "$rustc_version" \
+          "${ImageOS:-}" "${ImageVersion:-}" \
+          "${VCToolsVersion:-}" "${WindowsSDKVersion:-}" \
+          "$TARGET" "$CARGO_TARGET_DIR" "$GITHUB_WORKSPACE" \
+          "${RUSTFLAGS:-}" "${CARGO_ENCODED_RUSTFLAGS:-}" \
+          "$CARGO_INCREMENTAL" "$LIBSQLITE3_FLAGS" \
+          | sha256sum | cut -d ' ' -f 1)"
+        echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+        echo "cargo-home=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_OUTPUT"
+
+    # Include the commit in the primary key so a changed workspace can save its
+    # outputs. Only fall back to commits with identical toolchains/configuration.
+    # actions/cache saves in its post step only when this job succeeds.
+    - name: Restore Cargo cache
+      id: cargo
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: |
+          ${{ steps.environment.outputs.cargo-home }}/registry
+          ${{ steps.environment.outputs.cargo-home }}/git
+          ${{ env.CARGO_TARGET_DIR }}
+        key: windows-overlay-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.environment.outputs.fingerprint }}-${{ hashFiles('codex-rs/**/Cargo.toml', 'codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', 'codex-rs/.cargo/config.toml', '.github/workflows/windows-custom-build.yml', '.github/actions/**') }}-${{ github.sha }}
+        restore-keys: |
+          windows-overlay-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.environment.outputs.fingerprint }}-${{ hashFiles('codex-rs/**/Cargo.toml', 'codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', 'codex-rs/.cargo/config.toml', '.github/workflows/windows-custom-build.yml', '.github/actions/**') }}-
+
+    - name: Report cache reuse
+      shell: bash
+      env:
+        PROFILE: ${{ inputs.profile }}
+        CACHE_HIT: ${{ steps.cargo.outputs.cache-hit }}
+      run: |
+        echo "Cargo cache ($PROFILE): exact commit hit = ${CACHE_HIT:-false}. See Restore Cargo cache for fallback hits and transfer size." >> "$GITHUB_STEP_SUMMARY"

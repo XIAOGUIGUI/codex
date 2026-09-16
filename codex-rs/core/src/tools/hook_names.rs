@@ -38,6 +38,22 @@ impl HookToolName {
         }
     }
 
+    /// Returns the hook identity for exact edits through the structured file tool.
+    pub(crate) fn edit_file() -> Self {
+        Self {
+            name: "edit_file".to_string(),
+            matcher_aliases: vec!["apply_patch".to_string(), "Edit".to_string()],
+        }
+    }
+
+    /// Returns the hook identity for create-only writes through the structured file tool.
+    pub(crate) fn write_file() -> Self {
+        Self {
+            name: "write_file".to_string(),
+            matcher_aliases: vec!["apply_patch".to_string(), "Write".to_string()],
+        }
+    }
+
     /// Returns the hook identity for spawning sub-agents.
     ///
     /// The serialized name remains `spawn_agent`, while `Agent` is accepted as

@@ -51,16 +51,16 @@ async fn file_update_mode_follows_preserve_line_endings_feature() {
     let (_, mut turn) = make_session_and_context().await;
     assert_eq!(
         apply_patch_file_update_mode(&turn),
-        codex_apply_patch::ApplyPatchFileUpdateMode::NormalizeToLf
+        codex_apply_patch::ApplyPatchFileUpdateMode::PreserveLineEndings
     );
 
     Arc::make_mut(&mut turn.config)
         .features
-        .enable(codex_features::Feature::ApplyPatchPreserveLineEndings)
-        .expect("feature should be enabled");
+        .disable(codex_features::Feature::ApplyPatchPreserveLineEndings)
+        .expect("feature should be disabled");
     assert_eq!(
         apply_patch_file_update_mode(&turn),
-        codex_apply_patch::ApplyPatchFileUpdateMode::PreserveLineEndings
+        codex_apply_patch::ApplyPatchFileUpdateMode::NormalizeToLf
     );
 }
 
@@ -100,6 +100,93 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
             tool_input: json!({ "command": patch }),
             tool_response: json!("Success. Updated files."),
         })
+    );
+}
+
+#[test]
+fn function_patch_input_adds_missing_outer_markers() {
+    assert_eq!(
+        function_patch_input(r#"{"patch":"*** Add File: hello.txt\n+hello"}"#,),
+        Ok((
+            "*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch".to_string(),
+            None,
+        ))
+    );
+}
+
+#[test]
+fn function_patch_input_adds_only_missing_begin_marker() {
+    assert_eq!(
+        function_patch_input(r#"{"patch":"*** Add File: hello.txt\n+hello\n*** End Patch"}"#,),
+        Ok((
+            "*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch".to_string(),
+            None,
+        ))
+    );
+}
+
+#[test]
+fn function_patch_input_preserves_complete_patch_and_environment() {
+    assert_eq!(
+        function_patch_input(
+            r#"{"patch":"*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch","environment_id":"remote"}"#,
+        ),
+        Ok((sample_patch().to_string(), Some("remote".to_string())))
+    );
+}
+
+#[test]
+fn function_patch_input_rejects_command_array_arguments() {
+    assert_eq!(
+        function_patch_input(
+            r#"{"command":["apply_patch","*** Begin Patch\n*** End Patch"]}"#,
+        ),
+        Err(FunctionCallError::RespondToModel(
+            "apply_patch received invalid function arguments: unknown field `command`, expected `patch` or `environment_id` at line 1 column 10. Expected a JSON object like {\"patch\":\"*** Update File: path\\n@@\\n-old\\n+new\"}; do not pass a command array."
+                .to_string(),
+        ))
+    );
+}
+
+#[tokio::test]
+async fn function_payload_uses_stable_apply_patch_hook_contract() {
+    let patch = "*** Add File: hello.txt\n+hello";
+    let payload = ToolPayload::Function {
+        arguments: serde_json::to_string(&ApplyPatchFunctionArguments {
+            patch: patch.to_string(),
+            environment_id: Some("remote".to_string()),
+        })
+        .expect("arguments should serialize"),
+    };
+    let invocation = invocation_for_payload(payload).await;
+    let handler = ApplyPatchHandler::new(
+        /*multi_environment*/ true,
+        ApplyPatchToolType::Function,
+    );
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_input: json!({ "command": patch }),
+        })
+    );
+
+    let rewritten = handler
+        .with_updated_hook_input(
+            invocation,
+            json!({ "command": "*** Add File: hello.txt\n+rewritten" }),
+        )
+        .expect("hook rewrite should succeed");
+    assert_eq!(
+        rewritten.payload,
+        ToolPayload::Function {
+            arguments: serde_json::to_string(&ApplyPatchFunctionArguments {
+                patch: "*** Add File: hello.txt\n+rewritten".to_string(),
+                environment_id: Some("remote".to_string()),
+            })
+            .expect("arguments should serialize"),
+        }
     );
 }
 
