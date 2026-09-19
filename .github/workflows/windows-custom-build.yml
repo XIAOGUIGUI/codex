@@ -477,34 +477,34 @@ jobs:
         shell: pwsh
         run: |
           $manifest = Get-Content -LiteralPath "dist/windows-overlay/release-manifest.json" -Raw | ConvertFrom-Json
-          # npm publishes are processed asynchronously ("may take a few minutes
-          # to become available"), so poll the version endpoint for up to 6
-          # minutes. A unique query string per attempt bypasses any CDN-cached
-          # 404 left over from the availability check that ran before the
-          # publish. curl.exe is used because the PowerShell web cmdlets reject
-          # this URL shape (encoded slash in the path) at URI parse time.
-          $versionEndpoint = "https://registry.npmjs.org/@chenronggui%2Fcodex-win-patch/$env:PACKAGE_VERSION"
-          $bodyPath = Join-Path $env:RUNNER_TEMP "registry-verify.json"
           $dist = $null
-          $lastStatus = $null
+          $lastError = $null
+          $package = "@chenronggui/codex-win-patch@$env:PACKAGE_VERSION"
+          # npm publishes are processed asynchronously ("may take a few minutes
+          # to become available"), so poll npm itself instead of constructing a
+          # scoped package registry URL in PowerShell. npm handles the scoped
+          # package name escaping consistently on Windows.
           for ($attempt = 1; $attempt -le 36; $attempt++) {
-              $uri = "$versionEndpoint?attempt=$attempt&ts=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
-              $lastStatus = (& curl.exe -sS -w "%{http_code}" -o $bodyPath $uri 2>&1 | Select-Object -Last 1)
-              if ($lastStatus -eq "200") {
-                  $dist = Get-Content -LiteralPath $bodyPath -Raw | ConvertFrom-Json
+              $distJson = npm --silent view $package dist --json 2>&1
+              if ($LASTEXITCODE -eq 0) {
+                  $dist = $distJson | ConvertFrom-Json
+                  if ($dist -is [array]) {
+                      if ($dist.Count -ne 1) {
+                          throw "Registry returned $($dist.Count) dist entries for $package, expected 1."
+                      }
+                      $dist = $dist[0]
+                  }
                   break
               }
-              Write-Host "Waiting for npm registry propagation ($attempt/36, last HTTP status: $lastStatus)..."
+              $lastError = ($distJson | Out-String).Trim()
+              Write-Host "Waiting for npm registry propagation ($attempt/36, last error: $lastError)..."
               Start-Sleep -Seconds 10
           }
           if ($null -eq $dist) {
-              throw "Published package did not become visible in the npm registry after 6 minutes. Last HTTP status: $lastStatus"
+              throw "Published package did not become visible in the npm registry after 6 minutes. Last error: $lastError"
           }
-          if ($dist.version -ne $env:PACKAGE_VERSION) {
-              throw "Registry returned unexpected version $($dist.version), expected $env:PACKAGE_VERSION."
-          }
-          if ($dist.dist.shasum -ne $manifest.tarball.npmShasum -or
-              $dist.dist.integrity -ne $manifest.tarball.npmIntegrity) {
+          if ($dist.shasum -ne $manifest.tarball.npmShasum -or
+              $dist.integrity -ne $manifest.tarball.npmIntegrity) {
               throw "Published npm integrity metadata does not match the tested tarball."
           }
           "Published and registry-verified: @chenronggui/codex-win-patch@$env:PACKAGE_VERSION" |
