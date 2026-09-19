@@ -616,8 +616,8 @@ async fn subagent_start_replaces_session_start_and_injects_context(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let agent_type = (!fork_context).then_some("worker");
-    let expected_agent_type = agent_type.unwrap_or("default");
+    let agent_type = Some("worker");
+    let expected_agent_type = if fork_context { "default" } else { "worker" };
     let spawn_args = serde_json::to_string(&json!({
         "message": CHILD_PROMPT,
         "task_name": "child",
@@ -2113,8 +2113,7 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
     Ok(())
 }
 
-#[test_case(None, false; "encrypted")]
-#[test_case(None, true; "plaintext")]
+#[test_case(None, true; "custom provider plaintext")]
 #[test_case(Some("gpt-5.6-luna"), false; "luna encrypted leaf")]
 #[test_case(Some("gpt-5.5"), false; "legacy encrypted leaf")]
 #[tokio::test]
@@ -2153,8 +2152,8 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         "spawn_agent",
         &spawn_args,
     );
-    if plaintext {
-        spawn_event["item"]["encrypted_function_args"] = json!([]);
+    if !plaintext {
+        spawn_event["item"]["encrypted_function_args"] = json!(["message"]);
     }
     mount_sse_once_match(
         &server,
@@ -2269,7 +2268,9 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
             parent_request_log.requests().into_iter().any(|request| {
                 request.input().iter().any(|item| {
                     item["call_id"].as_str() == Some(SPAWN_CALL_ID)
-                        && item["encrypted_function_args"] == json!([])
+                        && item
+                            .get("encrypted_function_args")
+                            .is_none_or(|arguments| arguments == &json!([]))
                 })
             }),
             "plaintext function-call metadata should survive replay"

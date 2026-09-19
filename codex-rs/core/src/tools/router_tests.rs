@@ -59,6 +59,45 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     );
 }
 
+#[test]
+fn collaboration_messages_without_encryption_metadata_use_plaintext() {
+    for name in ["spawn_agent", "send_message", "followup_task"] {
+        for tool_name in [
+            ToolName::plain(name),
+            ToolName::namespaced("collaboration", name),
+        ] {
+            for encrypted_function_args in [None, Some(Vec::new())] {
+                let call = ToolCall {
+                    tool_name: tool_name.clone(),
+                    call_id: "call-plaintext".to_string(),
+                    payload: ToolPayload::Function {
+                        arguments: r#"{"message":"task"}"#.to_string(),
+                    },
+                    encrypted_function_args,
+                };
+
+                assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+            }
+        }
+    }
+}
+
+#[test]
+fn collaboration_messages_with_encrypted_arguments_remain_encrypted() {
+    for name in ["spawn_agent", "send_message", "followup_task"] {
+        let call = ToolCall {
+            tool_name: ToolName::namespaced("collaboration", name),
+            call_id: "call-encrypted".to_string(),
+            payload: ToolPayload::Function {
+                arguments: r#"{"message":"opaque"}"#.to_string(),
+            },
+            encrypted_function_args: Some(vec!["message".to_string()]),
+        };
+
+        assert_eq!(call.direct_source(), ToolCallSource::Direct);
+    }
+}
+
 impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
     fn tools(
         &self,

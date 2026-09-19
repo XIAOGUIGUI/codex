@@ -8,6 +8,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
 use codex_tools::ToolSpec;
+use std::time::Duration;
 
 #[derive(Default)]
 pub(crate) struct Handler {
@@ -57,11 +58,29 @@ async fn handle_spawn_agent(
     let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
-    let role_name = args
+    let requested_role_name = args
         .agent_type
         .as_deref()
         .map(str::trim)
         .filter(|role| !role.is_empty());
+    if args.fork_context && requested_role_name.is_some() {
+        session.services.compatibility_diagnostics.record(
+            codex_diagnostics::CompatibilityEventInput {
+                phase: "multi_agent.arguments.fork_role_ignored",
+                outcome: codex_diagnostics::CompatibilityOutcome::Success,
+                tool_name: Some("spawn_agent"),
+                tool_namespace: Some(MULTI_AGENT_V1_NAMESPACE),
+                representation: codex_diagnostics::ToolRepresentation::Function,
+                duration: Duration::ZERO,
+                input_bytes: arguments.len(),
+                output_bytes: 0,
+                error: None,
+            },
+        );
+    }
+    let role_name = (!args.fork_context)
+        .then_some(requested_role_name)
+        .flatten();
     let input_items = parse_collab_input(args.message, args.items)?;
     let prompt = render_input_preview(&input_items);
     let session_source = turn.session_source.clone();
@@ -72,6 +91,29 @@ async fn handle_spawn_agent(
             "Agent depth limit reached. Solve the task yourself.".to_string(),
         ));
     }
+    let mut config =
+        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+    apply_requested_spawn_agent_model_overrides(
+        &session,
+        turn.as_ref(),
+        &mut config,
+        args.model.as_deref(),
+        args.reasoning_effort.clone(),
+    )
+    .await?;
+    if !args.fork_context {
+        apply_spawn_agent_role(&session, &mut config, role_name).await?;
+    }
+    apply_spawn_agent_service_tier(&session, &mut config).await?;
+    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+    let spawn_source = thread_spawn_source(
+        session.thread_id,
+        &turn.session_source,
+        child_depth,
+        role_name,
+        /*task_name*/ None,
+    )?;
+
     session
         .emit_turn_item_started(
             turn,
@@ -89,35 +131,11 @@ async fn handle_spawn_agent(
             }),
         )
         .await;
-    let mut config =
-        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-    if args.fork_context {
-        reject_full_fork_agent_type_override(role_name)?;
-    }
-    apply_requested_spawn_agent_model_overrides(
-        &session,
-        turn.as_ref(),
-        &mut config,
-        args.model.as_deref(),
-        args.reasoning_effort.clone(),
-    )
-    .await?;
-    if !args.fork_context {
-        apply_spawn_agent_role(&session, &mut config, role_name).await?;
-    }
-    apply_spawn_agent_service_tier(&session, &mut config).await?;
-    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
 
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,
         input_items,
-        Some(thread_spawn_source(
-            session.thread_id,
-            &turn.session_source,
-            child_depth,
-            role_name,
-            /*task_name*/ None,
-        )?),
+        Some(spawn_source),
         SpawnAgentOptions {
             fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
@@ -216,6 +234,10 @@ async fn handle_spawn_agent(
 }
 
 impl CoreToolRuntime for Handler {
+    fn model_argument_bytes_limit(&self) -> Option<usize> {
+        Some(MAX_MULTI_AGENT_MESSAGE_ARGUMENT_BYTES)
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

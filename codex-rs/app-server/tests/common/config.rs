@@ -28,7 +28,7 @@ impl MockResponsesConfig {
             sandbox_mode: "read-only".to_string(),
             features: BTreeMap::new(),
             root_config: Vec::new(),
-            provider_config: Vec::new(),
+            provider_config: vec!["namespace_tools = true".to_string()],
             extra_config: Vec::new(),
         }
     }

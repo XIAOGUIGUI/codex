@@ -51,6 +51,10 @@ impl Handler {
 }
 
 impl CoreToolRuntime for Handler {
+    fn model_argument_bytes_limit(&self) -> Option<usize> {
+        Some(MAX_MULTI_AGENT_MESSAGE_ARGUMENT_BYTES)
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

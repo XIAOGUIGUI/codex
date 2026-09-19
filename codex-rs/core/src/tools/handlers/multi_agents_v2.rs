@@ -14,6 +14,9 @@ use crate::tools::handlers::multi_agents_common::*;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_diagnostics::CompatibilityEventInput;
+use codex_diagnostics::CompatibilityOutcome;
+use codex_diagnostics::ToolRepresentation;
 use codex_protocol::AgentPath;
 use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallItem;
@@ -28,6 +31,7 @@ use codex_tools::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::time::Duration;
 
 pub(crate) use followup_task::Handler as FollowupTaskHandler;
 pub(crate) use interrupt_agent::Handler as InterruptAgentHandler;
@@ -82,4 +86,34 @@ fn communication_from_tool_message(
     let content =
         InterAgentMessage::new(message_type, recipient.clone(), author.clone(), message).render();
     InterAgentCommunication::new(author, recipient, Vec::new(), content, trigger_turn)
+}
+
+fn record_message_transport(
+    session: &crate::session::session::Session,
+    tool_name: &str,
+    source: &crate::tools::context::ToolCallSource,
+    message_bytes: usize,
+) {
+    let transport = if matches!(
+        source,
+        crate::tools::context::ToolCallSource::DirectPlaintextMessage
+    ) {
+        "plaintext"
+    } else {
+        "encrypted"
+    };
+    session
+        .services
+        .compatibility_diagnostics
+        .record(CompatibilityEventInput {
+            phase: &format!("multi_agent.task_payload.{transport}"),
+            outcome: CompatibilityOutcome::Success,
+            tool_name: Some(tool_name),
+            tool_namespace: Some("collaboration"),
+            representation: ToolRepresentation::Function,
+            duration: Duration::ZERO,
+            input_bytes: message_bytes,
+            output_bytes: 0,
+            error: None,
+        });
 }

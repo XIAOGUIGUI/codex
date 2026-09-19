@@ -88,8 +88,10 @@ impl ToolCallLoopDetector {
 fn is_polling_tool(call: &ToolCall) -> bool {
     (call.tool_name.is_default_namespace()
         && matches!(call.tool_name.name.as_str(), "wait" | "write_stdin"))
-        || (call.tool_name.namespace.as_deref() == Some("collaboration")
-            && call.tool_name.name == "wait_agent")
+        || (matches!(
+            call.tool_name.namespace.as_deref(),
+            Some("collaboration" | "multi_agent_v1")
+        ) && call.tool_name.name == "wait_agent")
 }
 
 fn fingerprint(call: &ToolCall) -> [u8; 20] {

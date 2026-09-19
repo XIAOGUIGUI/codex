@@ -180,10 +180,6 @@ pub(crate) fn effective_multi_agent_mode(step_context: &StepContext) -> Option<M
     // of an effort-derived built-in policy.
     let multi_agent_mode = match mode_hint_text {
         Some(hint_text) => MultiAgentMode::Custom(hint_text.to_string()),
-        None if !turn_context.provider.info().is_openai() => catalog_mode
-            .and_then(|messages| messages.proactive.clone())
-            .map(MultiAgentMode::Custom)
-            .unwrap_or(MultiAgentMode::Proactive),
         None => match settings.effective_reasoning_effort() {
             Some(ReasoningEffort::Ultra) => catalog_mode
                 .and_then(|messages| messages.proactive.clone())

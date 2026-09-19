@@ -73,6 +73,10 @@ fn polling_tools_are_exempt() {
             ToolName::namespaced("collaboration", "wait_agent"),
             r#"{"timeout_ms":30000}"#,
         ),
+        function_call(
+            ToolName::namespaced("multi_agent_v1", "wait_agent"),
+            r#"{"targets":["agent"],"timeout_ms":30000}"#,
+        ),
     ];
 
     for call in calls {

@@ -46,6 +46,24 @@ pub(super) fn known_issues() -> BTreeMap<&'static str, Vec<&'static str>> {
             ],
         ),
         (
+            "multi_agent.thread.unavailable",
+            vec![
+                "https://github.com/openai/codex/issues/43689",
+                "https://github.com/openai/codex/issues/32737",
+            ],
+        ),
+        (
+            "multi_agent.wait.timeout",
+            vec!["https://github.com/openai/codex/issues/24951"],
+        ),
+        (
+            "provider.history.missing_tool_output",
+            vec![
+                "https://github.com/openai/codex/issues/44604",
+                "https://github.com/openai/codex/issues/16255",
+            ],
+        ),
+        (
             "process.resource_sample",
             vec![
                 "https://github.com/openai/codex/issues/12414",

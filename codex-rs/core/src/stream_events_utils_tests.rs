@@ -12,6 +12,7 @@ use crate::session::tests::tool_registry_for_test_step;
 use crate::tools::ToolRouter;
 use crate::tools::handlers::FileMutationToolHandler;
 use crate::tools::handlers::FileMutationToolKind;
+use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolRegistry;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -333,6 +334,7 @@ async fn file_mutation_history_limit_accepts_boundary_and_rejects_overflow_befor
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let mut registry = ToolRegistry::default();
     registry.add(FileMutationToolHandler::new(FileMutationToolKind::Write));
+    registry.add(SpawnAgentHandler::default());
     let router = Arc::new(ToolRouter::from_registry(
         step_context.turn.as_ref(),
         step_context.turn.model_info(),
@@ -415,6 +417,31 @@ async fn file_mutation_history_limit_accepts_boundary_and_rejects_overflow_befor
     };
     let codex_protocol::error::CodexErrorDetails::InvalidRequest(message) = error.details() else {
         panic!("oversized encrypted arguments should be rejected");
+    };
+    assert!(message.contains("combined 8192-byte limit"));
+    assert_eq!(session.clone_history().await.raw_items().len(), history_len);
+
+    let oversized_spawn = ResponseItem::FunctionCall {
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: None,
+        arguments: "x".repeat(8 * 1024 + 1),
+        call_id: "oversized-spawn".to_string(),
+        encrypted_function_args: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let error = match handle_output_item_done(
+        &mut ctx,
+        oversized_spawn,
+        /*previously_active_item*/ None,
+    )
+    .await
+    {
+        Ok(_) => panic!("oversized spawn arguments should be rejected"),
+        Err(error) => error,
+    };
+    let codex_protocol::error::CodexErrorDetails::InvalidRequest(message) = error.details() else {
+        panic!("oversized spawn arguments should be rejected");
     };
     assert!(message.contains("combined 8192-byte limit"));
     assert_eq!(session.clone_history().await.raw_items().len(), history_len);

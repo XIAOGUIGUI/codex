@@ -63,13 +63,49 @@ fn classifies_known_windows_and_provider_failures() {
             "unresolved git merge conflict marker <<<<<<< HEAD",
             "file.merge_conflict",
         ),
+        (
+            "failed to parse function arguments: invalid type: string, expected a sequence",
+            "multi_agent.arguments.targets_string",
+        ),
+        (
+            "No tool output found for tool call call_redacted",
+            "provider.history.missing_tool_output",
+        ),
     ];
     for (error, expected) in cases {
-        assert_eq!(
-            classify("tool.dispatch", Some("apply_patch"), Some(error)).code,
-            expected
-        );
+        let tool = if expected.starts_with("multi_agent.arguments") {
+            Some("wait_agent")
+        } else {
+            Some("apply_patch")
+        };
+        assert_eq!(classify("tool.dispatch", tool, Some(error)).code, expected);
     }
+}
+
+#[test]
+fn classifies_multi_agent_recovery_events_without_error_text() {
+    assert_eq!(
+        classify("multi_agent.arguments.normalized", Some("wait_agent"), None).code,
+        "multi_agent.arguments.normalized"
+    );
+    assert_eq!(
+        classify(
+            "multi_agent.task_payload.plaintext",
+            Some("spawn_agent"),
+            None
+        )
+        .code,
+        "multi_agent.task_payload.plaintext"
+    );
+    assert_eq!(
+        classify(
+            "multi_agent.arguments.fork_role_ignored",
+            Some("spawn_agent"),
+            None
+        )
+        .code,
+        "multi_agent.arguments.fork_role_ignored"
+    );
 }
 
 #[test]

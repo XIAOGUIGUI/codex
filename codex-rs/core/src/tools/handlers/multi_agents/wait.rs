@@ -64,7 +64,28 @@ impl Handler {
             ..
         } = invocation;
         let arguments = function_arguments(payload)?;
+        let normalized_arguments = serde_json::from_str::<JsonValue>(&arguments)
+            .ok()
+            .is_some_and(|value| {
+                value.get("targets").is_some_and(JsonValue::is_string)
+                    || value.get("timeout_ms").is_some_and(JsonValue::is_string)
+            });
         let args: WaitArgs = parse_arguments(&arguments)?;
+        if normalized_arguments {
+            session.services.compatibility_diagnostics.record(
+                codex_diagnostics::CompatibilityEventInput {
+                    phase: "multi_agent.arguments.normalized",
+                    outcome: codex_diagnostics::CompatibilityOutcome::Success,
+                    tool_name: Some("wait_agent"),
+                    tool_namespace: Some(MULTI_AGENT_V1_NAMESPACE),
+                    representation: codex_diagnostics::ToolRepresentation::Function,
+                    duration: Duration::ZERO,
+                    input_bytes: arguments.len(),
+                    output_bytes: 0,
+                    error: None,
+                },
+            );
+        }
         let receiver_thread_ids = parse_agent_id_targets(args.targets)?;
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
         let mut target_by_thread_id = HashMap::with_capacity(receiver_thread_ids.len());
@@ -98,6 +119,7 @@ impl Handler {
             }
             ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
 
         session
             .emit_turn_item_started(
@@ -119,19 +141,25 @@ impl Handler {
 
         let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
         let mut initial_final_statuses = Vec::new();
+        let mut setup_timed_out = false;
         for id in &receiver_thread_ids {
-            match session.services.agent_control.subscribe_status(*id).await {
-                Ok(rx) => {
+            match timeout_at(
+                deadline,
+                session.services.agent_control.subscribe_status(*id),
+            )
+            .await
+            {
+                Ok(Ok(rx)) => {
                     let status = rx.borrow().clone();
                     if is_final(&status) {
                         initial_final_statuses.push((*id, status));
                     }
                     status_rxs.push((*id, rx));
                 }
-                Err(err) if matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) => {
+                Ok(Err(err)) if matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) => {
                     initial_final_statuses.push((*id, AgentStatus::NotFound));
                 }
-                Err(err) => {
+                Ok(Err(err)) => {
                     let mut statuses = HashMap::with_capacity(1);
                     statuses.insert(*id, session.services.agent_control.get_status(*id).await);
                     session
@@ -153,10 +181,16 @@ impl Handler {
                         .await;
                     return Err(collab_agent_error(*id, err));
                 }
+                Err(_) => {
+                    setup_timed_out = true;
+                    break;
+                }
             }
         }
 
-        let statuses = if !initial_final_statuses.is_empty() {
+        let statuses = if setup_timed_out {
+            Vec::new()
+        } else if !initial_final_statuses.is_empty() {
             initial_final_statuses
         } else {
             let mut futures = FuturesUnordered::new();
@@ -165,7 +199,6 @@ impl Handler {
                 futures.push(wait_for_final_status(session, id, rx));
             }
             let mut results = Vec::new();
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
             loop {
                 match timeout_at(deadline, futures.next()).await {
                     Ok(Some(Some(result))) => {
@@ -275,9 +308,59 @@ impl CoreToolRuntime for Handler {
 
 #[derive(Debug, Deserialize)]
 struct WaitArgs {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_targets")]
     targets: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_i64")]
     timeout_ms: Option<i64>,
+}
+
+fn deserialize_targets<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+
+    let value = JsonValue::deserialize(deserializer)?;
+    match value {
+        JsonValue::Array(values) => values
+            .into_iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| D::Error::custom("targets must contain only strings"))
+            })
+            .collect(),
+        JsonValue::String(encoded) => serde_json::from_str::<Vec<String>>(&encoded).map_err(|_| {
+            D::Error::custom(
+                "targets must be an array of agent ids, for example [\"id1\", \"id2\"]",
+            )
+        }),
+        _ => Err(D::Error::custom(
+            "targets must be an array of agent ids, for example [\"id1\", \"id2\"]",
+        )),
+    }
+}
+
+fn deserialize_optional_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+
+    let value = Option::<JsonValue>::deserialize(deserializer)?;
+    match value {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(JsonValue::Number(value)) => value
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| D::Error::custom("timeout_ms must be an integer")),
+        Some(JsonValue::String(value)) => value
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|_| D::Error::custom("timeout_ms must be an integer")),
+        Some(_) => Err(D::Error::custom("timeout_ms must be an integer")),
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]

@@ -15,6 +15,7 @@ use crate::session::turn_context::TurnContext;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::multi_agents::wait::WaitAgentResult;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
@@ -338,9 +339,15 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 }
 
 #[tokio::test]
-async fn spawn_agent_fork_context_rejects_agent_type_override() {
+async fn spawn_agent_fork_context_ignores_agent_type_override() {
+    #[derive(Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
+    let expected_model = turn.model_info().slug.clone();
     let manager = thread_manager();
     let root = manager
         .start_thread(StartThreadOptions::new((*turn.config).clone()))
@@ -348,7 +355,7 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
     session.thread_id = root.thread_id;
-    let err = SpawnAgentHandler::default()
+    let output = SpawnAgentHandler::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -360,14 +367,55 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
             })),
         ))
         .await
-        .err()
-        .expect("fork_context should reject agent_type overrides");
+        .expect("fork_context should ignore agent_type overrides");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let snapshot = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, expected_model);
+}
+
+#[tokio::test]
+async fn spawn_agent_rejects_oversized_role_developer_instructions() {
+    let (session, turn) = make_session_and_context().await;
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn.config.codex_home.as_path().join("oversized-role.toml");
+    tokio::fs::write(
+        &role_config_path,
+        format!(
+            "developer_instructions = \"{}\"\n",
+            "x".repeat(MAX_SUBAGENT_DEVELOPER_INSTRUCTIONS_BYTES + 1)
+        ),
+    )
+    .await
+    .expect("role config should be written");
+    let mut config = (*turn.config).clone();
+    config.agent_roles.insert(
+        "oversized".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+
+    let error = apply_spawn_agent_role(&session, &mut config, Some("oversized"))
+        .await
+        .expect_err("oversized role instructions should fail");
 
     assert_eq!(
-        err,
-        FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type; omit agent_type, or spawn without a full-history fork.".to_string(),
-        )
+        error,
+        FunctionCallError::RespondToModel(format!(
+            "agent_type developer instructions exceed the {MAX_SUBAGENT_DEVELOPER_INSTRUCTIONS_BYTES}-byte limit"
+        ))
     );
 }
 
@@ -2812,6 +2860,38 @@ async fn wait_agent_rejects_non_positive_timeout() {
         err,
         FunctionCallError::RespondToModel("timeout_ms must be greater than zero".to_string())
     );
+}
+
+#[tokio::test]
+async fn wait_agent_normalizes_string_encoded_targets_and_timeout() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let target = ThreadId::new().to_string();
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "wait_agent",
+        function_payload(json!({
+            "targets": serde_json::to_string(&vec![target.clone()]).expect("encode targets"),
+            "timeout_ms": "10"
+        })),
+    );
+    let output = WaitAgentHandler::default()
+        .handle(invocation)
+        .await
+        .expect("normalized wait arguments should execute");
+    let (content, _) = expect_text_output(output);
+    let result: WaitAgentResult =
+        serde_json::from_str(&content).expect("wait result should be json");
+
+    assert!(!result.timed_out);
+    assert_eq!(result.status.len(), 1);
 }
 
 #[tokio::test]

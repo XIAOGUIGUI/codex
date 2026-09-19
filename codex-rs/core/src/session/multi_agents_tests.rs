@@ -9,7 +9,7 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn custom_providers_default_to_proactive_delegation() {
+async fn custom_providers_default_to_explicit_request_only_delegation() {
     let (_session, mut turn) = make_session_and_context().await;
     turn.multi_agent_version = MultiAgentVersion::V2;
     turn.provider = create_model_provider(
@@ -23,6 +23,6 @@ async fn custom_providers_default_to_proactive_delegation() {
     let step_context = StepContext::for_test(Arc::new(turn));
     assert_eq!(
         effective_multi_agent_mode(&step_context),
-        Some(MultiAgentMode::Proactive)
+        Some(MultiAgentMode::ExplicitRequestOnly)
     );
 }

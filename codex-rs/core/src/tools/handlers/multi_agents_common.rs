@@ -31,6 +31,8 @@ pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIME
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 pub(crate) const MAX_SPAWN_AGENT_MODEL_OVERRIDES: usize = 5;
+pub(crate) const MAX_MULTI_AGENT_MESSAGE_ARGUMENT_BYTES: usize = 8 * 1024;
+pub(crate) const MAX_SUBAGENT_DEVELOPER_INSTRUCTIONS_BYTES: usize = 8 * 1024;
 
 pub(crate) fn model_supports_multi_agent_backend(
     model: &ModelPreset,
@@ -220,17 +222,6 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     Ok(config)
 }
 
-pub(crate) fn reject_full_fork_agent_type_override(
-    agent_type: Option<&str>,
-) -> Result<(), FunctionCallError> {
-    if agent_type.is_some() {
-        return Err(FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type; omit agent_type, or spawn without a full-history fork.".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 /// Copies runtime-only turn state onto a child config before it is handed to `AgentControl`.
 ///
 /// These values are chosen by the live turn rather than persisted config, so leaving them stale can
@@ -359,9 +350,22 @@ pub(crate) async fn apply_spawn_agent_role(
 ) -> Result<(), FunctionCallError> {
     let previous_model = config.model.clone();
     let previous_reasoning_effort = config.model_reasoning_effort.clone();
+    let previous_developer_instructions = config.developer_instructions.clone();
     apply_role_to_config(config, role_name)
         .await
         .map_err(FunctionCallError::RespondToModel)?;
+    if config.developer_instructions != previous_developer_instructions
+        && config
+            .developer_instructions
+            .as_ref()
+            .is_some_and(|instructions| {
+                instructions.len() > MAX_SUBAGENT_DEVELOPER_INSTRUCTIONS_BYTES
+            })
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "agent_type developer instructions exceed the {MAX_SUBAGENT_DEVELOPER_INSTRUCTIONS_BYTES}-byte limit"
+        )));
+    }
     if config.model == previous_model && config.model_reasoning_effort == previous_reasoning_effort
     {
         return Ok(());

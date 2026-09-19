@@ -96,6 +96,11 @@ pub(super) async fn handle_message_string_tool(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
+    let tool_name = match mode {
+        MessageDeliveryMode::QueueOnly => "send_message",
+        MessageDeliveryMode::TriggerTurn => "followup_task",
+    };
+    record_message_transport(&session, tool_name, &source, message.len());
     let communication = communication_from_tool_message(
         author,
         receiver_agent_path.clone(),

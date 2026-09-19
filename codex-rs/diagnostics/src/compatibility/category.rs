@@ -16,6 +16,30 @@ pub(super) fn classify(phase: &str, tool: Option<&str>, error: Option<&str>) -> 
             "An unchanged range reused content already present in history",
         );
     }
+    if phase == "multi_agent.task_payload.plaintext" {
+        return classified(
+            "multi_agent.task_payload.plaintext",
+            "A sub-agent task used plaintext transport",
+        );
+    }
+    if phase == "multi_agent.task_payload.encrypted" {
+        return classified(
+            "multi_agent.task_payload.encrypted",
+            "A sub-agent task used encrypted transport",
+        );
+    }
+    if phase == "multi_agent.arguments.normalized" {
+        return classified(
+            "multi_agent.arguments.normalized",
+            "A known multi-agent argument wrapper was normalized",
+        );
+    }
+    if phase == "multi_agent.arguments.fork_role_ignored" {
+        return classified(
+            "multi_agent.arguments.fork_role_ignored",
+            "A full-history child ignored an explicit role override",
+        );
+    }
     let Some(error) = error else {
         return classified("operation.completed", "operation completed");
     };
@@ -74,9 +98,34 @@ pub(super) fn classify(phase: &str, tool: Option<&str>, error: Option<&str>) -> 
     } else if contains("failed to parse function arguments")
         || contains("invalid function arguments")
     {
+        if tool == Some("wait_agent")
+            && contains("invalid type: string")
+            && contains("expected a sequence")
+        {
+            classified(
+                "multi_agent.arguments.targets_string",
+                "wait_agent targets was encoded as a string instead of an array",
+            )
+        } else {
+            classified(
+                "provider.function_arguments.invalid",
+                "Provider returned invalid function arguments",
+            )
+        }
+    } else if contains("full-history forked agents inherit the parent agent type") {
         classified(
-            "provider.function_arguments.invalid",
-            "Provider returned invalid function arguments",
+            "multi_agent.arguments.fork_context_agent_type",
+            "spawn_agent combined a full-history fork with an unsupported role override",
+        )
+    } else if contains("no tool output found for tool call") {
+        classified(
+            "provider.history.missing_tool_output",
+            "A model request contained a tool call without its output",
+        )
+    } else if contains("no longer available") && tool == Some("wait_agent") {
+        classified(
+            "multi_agent.thread.unavailable",
+            "A referenced sub-agent thread was no longer available",
         )
     } else if contains("first line of the patch") || contains("*** begin patch") {
         classified(
@@ -130,6 +179,11 @@ pub(super) fn classify(phase: &str, tool: Option<&str>, error: Option<&str>) -> 
         classified(
             "windows.command_line.too_long",
             "Windows command-line length limit was exceeded",
+        )
+    } else if (contains("timed out") || contains("timeout")) && tool == Some("wait_agent") {
+        classified(
+            "multi_agent.wait.timeout",
+            "wait_agent exceeded its deadline",
         )
     } else if contains("timed out") || contains("timeout") {
         classified("operation.timeout", "Operation timed out")

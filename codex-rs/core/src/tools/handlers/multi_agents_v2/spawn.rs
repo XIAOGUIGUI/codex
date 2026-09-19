@@ -169,6 +169,7 @@ async fn handle_spawn_agent(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
+    record_message_transport(&session, "spawn_agent", &source, message.len());
     let communication = communication_from_tool_message(
         author,
         new_agent_path.clone(),
@@ -270,6 +271,10 @@ async fn handle_spawn_agent(
 }
 
 impl CoreToolRuntime for Handler {
+    fn model_argument_bytes_limit(&self) -> Option<usize> {
+        Some(MAX_MULTI_AGENT_MESSAGE_ARGUMENT_BYTES)
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

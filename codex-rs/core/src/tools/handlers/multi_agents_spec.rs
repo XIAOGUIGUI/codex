@@ -15,7 +15,7 @@ pub const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
-const SPAWN_AGENT_TYPE_OVERRIDE_DESCRIPTION_V1: &str = "Agent type override for the new agent. Omit to inherit the parent agent type with a full-history fork; otherwise, `default` is used.";
+const SPAWN_AGENT_TYPE_OVERRIDE_DESCRIPTION_V1: &str = "Agent type override for a fresh agent. Full-history forks inherit the parent agent type and ignore this field; otherwise, `default` is used when omitted.";
 const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
     "Model override for the new agent. Omit unless an explicit override is needed.";
 const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
@@ -597,7 +597,7 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
         (
             "fork_context".to_string(),
             JsonSchema::boolean(Some(
-                "True forks the current thread history into the new agent; false or omitted starts with only the initial prompt."
+                "True forks the current thread history and agent type into the new agent; false or omitted starts with only the initial prompt. When true, agent_type is ignored."
                     .to_string(),
             )),
         ),
@@ -834,7 +834,7 @@ fn wait_agent_tool_parameters_v1(options: WaitAgentTimeoutOptions) -> JsonSchema
             JsonSchema::array(
                 JsonSchema::string(/*description*/ None),
                 Some(
-                    "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+                    "Agent ids to wait on. Pass a JSON array such as [\"id1\", \"id2\"], not a string containing an encoded array. Pass multiple ids to wait for whichever finishes first."
                         .to_string(),
                 ),
             ),
@@ -842,7 +842,7 @@ fn wait_agent_tool_parameters_v1(options: WaitAgentTimeoutOptions) -> JsonSchema
         (
             "timeout_ms".to_string(),
             JsonSchema::number(Some(format!(
-                "Timeout in milliseconds. Defaults to {}, min {}, max {}. Prefer longer waits (minutes) to avoid busy polling.",
+                "Timeout in milliseconds as an integer, not a quoted string. Defaults to {}, min {}, max {}. Prefer longer waits (minutes) to avoid busy polling.",
                 options.default_timeout_ms, options.min_timeout_ms, options.max_timeout_ms,
             ))),
         ),

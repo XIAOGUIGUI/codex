@@ -438,8 +438,14 @@ fn safe_tool_name(value: &str) -> String {
         "exec_command",
         "glob_files",
         "grep_files",
+        "followup_task",
+        "interrupt_agent",
+        "list_agents",
         "read_file",
+        "send_message",
         "shell",
+        "spawn_agent",
+        "wait_agent",
         "write_file",
         "write_stdin",
     ];
@@ -451,8 +457,12 @@ fn safe_tool_name(value: &str) -> String {
 }
 
 fn safe_namespace(value: &str) -> String {
-    if value.is_empty() || value == "functions" {
-        "functions".to_string()
+    if value.is_empty() || matches!(value, "functions" | "collaboration" | "multi_agent_v1") {
+        if value.is_empty() {
+            "functions".to_string()
+        } else {
+            value.to_string()
+        }
     } else {
         format!("external:{}", &fingerprint(value)[..16])
     }
