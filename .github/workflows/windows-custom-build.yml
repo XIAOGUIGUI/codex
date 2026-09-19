@@ -96,6 +96,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           just test -p codex-core adjacent_small_reads_expand_and_overlapping_reads_reuse_history
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build -p codex-code-mode-host --bin codex-code-mode-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ${env:CARGO_BIN_EXE_codex-code-mode-host} = "$env:CARGO_TARGET_DIR\debug\codex-code-mode-host.exe"
+          if (-not (Test-Path ${env:CARGO_BIN_EXE_codex-code-mode-host})) {
+            Write-Error "Missing codex-code-mode-host binary at ${env:CARGO_BIN_EXE_codex-code-mode-host}"
+            exit 1
+          }
           just test -p codex-core code_mode_result
           exit $LASTEXITCODE
 

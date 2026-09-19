@@ -161,6 +161,55 @@ fn function_patch_input_rejects_command_array_arguments() {
 }
 
 #[tokio::test]
+async fn apply_patch_line_stats_counts_proposed_and_accepted_lines() {
+    let temp = TempDir::new().unwrap();
+    let old_path = temp.path().join("old.txt");
+    std::fs::write(&old_path, "old\nsame\n").unwrap();
+    let patch = codex_apply_patch::parse_patch(&format!(
+        concat!(
+            "*** Begin Patch\n",
+            "*** Add File: {}\n",
+            "+one\n",
+            "+two\n",
+            "*** Update File: {}\n",
+            "@@\n",
+            "-old\n",
+            "+new\n",
+            "+extra\n",
+            " same\n",
+            "*** End Patch",
+        ),
+        temp.path().join("new.txt").display(),
+        old_path.display(),
+    ))
+    .unwrap();
+    let action = match codex_apply_patch::verify_apply_patch_args_with_mode(
+        patch,
+        &PathUri::from_host_native_path(temp.path()).unwrap(),
+        ApplyPatchFileUpdateMode::PreserveLineEndings,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    {
+        MaybeApplyPatchVerified::Body(action) => action,
+        other => panic!("expected verified patch, got {other:?}"),
+    };
+
+    assert_eq!(
+        serde_json::to_value(apply_patch_line_stats_for_action(&action)).unwrap(),
+        json!({
+            "proposed_added_lines": 4,
+            "proposed_deleted_lines": 1,
+            "proposed_changed_files": 2,
+            "accepted_added_lines": 4,
+            "accepted_deleted_lines": 1,
+            "accepted_changed_files": 2,
+        })
+    );
+}
+
+#[tokio::test]
 async fn function_payload_uses_stable_apply_patch_hook_contract() {
     let patch = "*** Add File: hello.txt\n+hello";
     let payload = ToolPayload::Function {

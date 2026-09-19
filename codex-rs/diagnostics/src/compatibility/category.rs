@@ -31,6 +31,24 @@ pub(super) fn classify(phase: &str, tool: Option<&str>, error: Option<&str>) -> 
             "provider.output.tool_loop",
             "Model repeated an identical tool call",
         )
+    } else if contains("orchestrator_helper_launch_canceled")
+        || contains("shellexecuteexw failed")
+        || contains("windowsapps")
+    {
+        classified(
+            "windows.sandbox.helper_launch",
+            "Windows sandbox helper failed to launch",
+        )
+    } else if contains("apply deny-read acls") || contains("deny-read acls") {
+        classified(
+            "windows.sandbox.acl_deny_read",
+            "Windows sandbox failed while applying deny-read ACLs",
+        )
+    } else if contains("proxy") && contains("sandbox") {
+        classified(
+            "windows.sandbox.proxy_env",
+            "Windows sandbox failed with proxy environment settings",
+        )
     } else if contains("split writable root") {
         classified(
             "windows.sandbox.split_roots",

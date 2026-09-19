@@ -32,6 +32,18 @@ fn classifies_known_windows_and_provider_failures() {
             "windows.sandbox.split_roots",
         ),
         (
+            "helper_unknown_error: apply deny-read ACLs failed",
+            "windows.sandbox.acl_deny_read",
+        ),
+        (
+            "orchestrator_helper_launch_canceled: ShellExecuteExW failed for WindowsApps",
+            "windows.sandbox.helper_launch",
+        ),
+        (
+            "Windows sandbox failed while inheriting proxy environment",
+            "windows.sandbox.proxy_env",
+        ),
+        (
             "provider does not support custom/freeform tools",
             "provider.tool_schema.custom_unsupported",
         ),

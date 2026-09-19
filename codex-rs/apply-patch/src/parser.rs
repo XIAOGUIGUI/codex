@@ -23,6 +23,9 @@
 //!
 //! The parser below is a little more lenient than the explicit spec and allows for
 //! leading/trailing whitespace around patch markers.
+use std::borrow::Cow;
+use std::collections::HashMap;
+
 use crate::ApplyPatchArgs;
 use crate::streaming_parser::StreamingPatchParser;
 #[cfg(test)]
@@ -192,16 +195,13 @@ enum ParseMode {
 
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
     let patch = patch.strip_prefix('\u{feff}').unwrap_or(patch);
+    let patch = normalize_patch_text(patch, mode)?;
     let lines: Vec<&str> = patch.trim().lines().collect();
-    let patch_lines = match mode {
-        ParseMode::Strict => check_patch_boundaries_strict(&lines)?,
-        ParseMode::Lenient => check_patch_boundaries_lenient(&lines)?,
-    };
-
-    let patch = patch_lines.join("\n");
+    check_patch_boundaries_strict(&lines)?;
+    let patch = lines.join("\n");
     let mut parser = StreamingPatchParser::default();
     parser.push_delta(&patch)?;
-    let hunks = parser.finish()?;
+    let hunks = merge_duplicate_update_hunks(parser.finish()?);
     let environment_id = parser.environment_id().map(str::to_owned);
     Ok(ApplyPatchArgs {
         hunks,
@@ -209,6 +209,31 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
         workdir: None,
         environment_id,
     })
+}
+
+fn normalize_patch_text(patch: &str, mode: ParseMode) -> Result<Cow<'_, str>, ParseError> {
+    let trimmed = patch.trim();
+    let lines: Vec<&str> = trimmed.lines().collect();
+    if check_patch_boundaries_strict(&lines).is_ok() {
+        return Ok(Cow::Borrowed(patch));
+    }
+
+    if matches!(mode, ParseMode::Strict) {
+        return Ok(Cow::Borrowed(patch));
+    }
+
+    if trimmed == "{}" || trimmed.len() < 10 {
+        return Err(InvalidPatchError(
+            "apply_patch input is empty or too short; rerun with a complete patch".to_string(),
+        ));
+    }
+
+    if let Some(inner_lines) = heredoc_inner_lines(&lines) {
+        check_patch_boundaries_strict(inner_lines)?;
+        return Ok(Cow::Owned(inner_lines.join("\n")));
+    }
+
+    normalize_missing_outer_markers(trimmed, &lines).map(Cow::Owned)
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,
@@ -223,35 +248,116 @@ fn check_patch_boundaries_strict<'a>(lines: &'a [&'a str]) -> Result<&'a [&'a st
     Ok(lines)
 }
 
-/// If we are in lenient mode, we check if the first line starts with `<<EOF`
-/// (possibly quoted) and the last line ends with `EOF`. There must be at least
-/// 4 lines total because the heredoc markers take up 2 lines and the patch text
-/// must have at least 2 lines.
-///
-/// If successful, returns the lines of the patch text that contain the patch
-/// contents, excluding the heredoc markers.
-fn check_patch_boundaries_lenient<'a>(
-    original_lines: &'a [&'a str],
-) -> Result<&'a [&'a str], ParseError> {
-    let original_parse_error = match check_patch_boundaries_strict(original_lines) {
-        Ok(lines) => return Ok(lines),
-        Err(e) => e,
+fn heredoc_inner_lines<'a>(lines: &'a [&'a str]) -> Option<&'a [&'a str]> {
+    let [first, .., last] = lines else {
+        return None;
+    };
+    ((first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
+        && last.ends_with("EOF")
+        && lines.len() >= 4)
+        .then_some(&lines[1..lines.len() - 1])
+}
+
+fn normalize_missing_outer_markers(trimmed: &str, lines: &[&str]) -> Result<String, ParseError> {
+    let Some(first_line) = lines.first().map(|line| line.trim_end_matches('\r')) else {
+        return Err(InvalidPatchError(
+            "The first line of the patch must be '*** Begin Patch'".to_string(),
+        ));
+    };
+    let Some(last_line) = lines.last().map(|line| line.trim_end_matches('\r')) else {
+        return Err(InvalidPatchError(
+            "The last line of the patch must be '*** End Patch'".to_string(),
+        ));
     };
 
-    match original_lines {
-        [first, .., last] => {
-            if (first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
-                && last.ends_with("EOF")
-                && original_lines.len() >= 4
-            {
-                let inner_lines = &original_lines[1..original_lines.len() - 1];
-                check_patch_boundaries_strict(inner_lines)
-            } else {
-                Err(original_parse_error)
-            }
+    if first_line == BEGIN_PATCH_MARKER {
+        if lines
+            .iter()
+            .any(|line| line.trim_end_matches('\r') == END_PATCH_MARKER)
+        {
+            return Ok(trimmed.to_string());
         }
-        _ => Err(original_parse_error),
+        if lines.iter().any(|line| is_file_hunk_header(line)) {
+            return Ok(format!("{trimmed}\n{END_PATCH_MARKER}"));
+        }
     }
+
+    if !is_file_hunk_header(first_line) {
+        return Err(InvalidPatchError(
+            "The first line of the patch must be '*** Begin Patch'".to_string(),
+        ));
+    }
+
+    if lines
+        .iter()
+        .any(|line| line.trim_end_matches('\r') == BEGIN_PATCH_MARKER)
+    {
+        return Err(InvalidPatchError(
+            "apply_patch has a misplaced '*** Begin Patch' marker; place it on the first line"
+                .to_string(),
+        ));
+    }
+
+    let has_end_marker = lines
+        .iter()
+        .any(|line| line.trim_end_matches('\r') == END_PATCH_MARKER);
+    if last_line == END_PATCH_MARKER {
+        return Ok(format!("{BEGIN_PATCH_MARKER}\n{trimmed}"));
+    }
+    if has_end_marker {
+        return Err(InvalidPatchError(
+            "apply_patch has a misplaced '*** End Patch' marker; place it on the last line"
+                .to_string(),
+        ));
+    }
+
+    Ok(format!(
+        "{BEGIN_PATCH_MARKER}\n{trimmed}\n{END_PATCH_MARKER}"
+    ))
+}
+
+fn is_file_hunk_header(line: &str) -> bool {
+    let line = line.trim_end_matches('\r');
+    [ADD_FILE_MARKER, DELETE_FILE_MARKER, UPDATE_FILE_MARKER]
+        .iter()
+        .any(|prefix| {
+            line.strip_prefix(prefix)
+                .is_some_and(|path| !path.is_empty())
+        })
+}
+
+fn merge_duplicate_update_hunks(hunks: Vec<Hunk>) -> Vec<Hunk> {
+    let mut merged = Vec::<Hunk>::new();
+    let mut update_indices = HashMap::<PathBuf, usize>::new();
+
+    for hunk in hunks {
+        match hunk {
+            Hunk::UpdateFile {
+                path,
+                move_path: None,
+                chunks,
+            } => {
+                if let Some(index) = update_indices.get(&path).copied()
+                    && let Hunk::UpdateFile {
+                        chunks: existing_chunks,
+                        ..
+                    } = &mut merged[index]
+                {
+                    existing_chunks.extend(chunks);
+                    continue;
+                }
+                update_indices.insert(path.clone(), merged.len());
+                merged.push(Hunk::UpdateFile {
+                    path,
+                    move_path: None,
+                    chunks,
+                });
+            }
+            hunk => merged.push(hunk),
+        }
+    }
+
+    merged
 }
 
 fn check_start_and_end_lines_strict(
@@ -423,6 +529,85 @@ fn test_parse_patch() {
                 context_line_indices: vec![(0, 0)],
                 is_end_of_file: false,
             }],
+        }]
+    );
+}
+
+#[test]
+fn test_lenient_parse_adds_missing_outer_markers() {
+    assert_eq!(
+        parse_patch_text("*** Add File: foo\n+hi", ParseMode::Lenient)
+            .unwrap()
+            .hunks,
+        vec![AddFile {
+            path: PathBuf::from("foo"),
+            contents: "hi\n".to_string()
+        }]
+    );
+
+    assert_eq!(
+        parse_patch_text(
+            "*** Begin Patch\n*** Add File: foo\n+hi",
+            ParseMode::Lenient
+        )
+        .unwrap()
+        .hunks,
+        vec![AddFile {
+            path: PathBuf::from("foo"),
+            contents: "hi\n".to_string()
+        }]
+    );
+}
+
+#[test]
+fn test_lenient_parse_rejects_empty_json_like_patch() {
+    assert_eq!(
+        parse_patch_text("{}", ParseMode::Lenient),
+        Err(InvalidPatchError(
+            "apply_patch input is empty or too short; rerun with a complete patch".to_string()
+        ))
+    );
+}
+
+#[test]
+fn test_lenient_parse_merges_duplicate_update_file_hunks() {
+    let hunks = parse_patch_text(
+        "*** Begin Patch\n\
+         *** Update File: foo\n\
+         @@\n\
+         -old1\n\
+         +new1\n\
+         *** Update File: foo\n\
+         @@\n\
+         -old2\n\
+         +new2\n\
+         *** End Patch",
+        ParseMode::Lenient,
+    )
+    .unwrap()
+    .hunks;
+
+    assert_eq!(
+        hunks,
+        vec![UpdateFile {
+            path: PathBuf::from("foo"),
+            move_path: None,
+            chunks: vec![
+                UpdateFileChunk {
+                    change_context: None,
+                    old_lines: vec!["old1".to_string()],
+                    new_lines: vec!["new1".to_string()],
+                    context_line_indices: Vec::new(),
+                    is_end_of_file: false,
+                },
+                UpdateFileChunk {
+                    change_context: None,
+                    old_lines: vec!["old2".to_string()],
+                    new_lines: vec!["new2".to_string()],
+                    context_line_indices: Vec::new(),
+                    is_end_of_file: false,
+                },
+            ],
         }]
     );
 }

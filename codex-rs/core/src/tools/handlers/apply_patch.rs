@@ -60,6 +60,7 @@ use codex_sandboxing::policy_transforms::normalize_additional_permissions_with_c
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_path_uri::PathUri;
+use serde::Serialize;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -256,6 +257,66 @@ fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<PathUri> {
     }
 
     keys
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct ApplyPatchLineStats {
+    proposed_added_lines: u64,
+    proposed_deleted_lines: u64,
+    proposed_changed_files: u64,
+    accepted_added_lines: u64,
+    accepted_deleted_lines: u64,
+    accepted_changed_files: u64,
+}
+
+fn apply_patch_line_stats_for_action(action: &ApplyPatchAction) -> ApplyPatchLineStats {
+    let changed_files = u64::try_from(action.changes().len()).unwrap_or(u64::MAX);
+    let mut stats = ApplyPatchLineStats {
+        proposed_changed_files: changed_files,
+        accepted_changed_files: changed_files,
+        ..Default::default()
+    };
+
+    for change in action.changes().values() {
+        let (added, deleted) = match change {
+            ApplyPatchFileChange::Add { content } => (count_content_lines(content), 0),
+            ApplyPatchFileChange::Delete { content } => (0, count_content_lines(content)),
+            ApplyPatchFileChange::Update { unified_diff, .. } => {
+                count_unified_diff_lines(unified_diff)
+            }
+        };
+        stats.proposed_added_lines = stats.proposed_added_lines.saturating_add(added);
+        stats.proposed_deleted_lines = stats.proposed_deleted_lines.saturating_add(deleted);
+        stats.accepted_added_lines = stats.accepted_added_lines.saturating_add(added);
+        stats.accepted_deleted_lines = stats.accepted_deleted_lines.saturating_add(deleted);
+    }
+
+    stats
+}
+
+fn count_content_lines(content: &str) -> u64 {
+    u64::try_from(content.lines().count()).unwrap_or(u64::MAX)
+}
+
+fn count_unified_diff_lines(unified_diff: &str) -> (u64, u64) {
+    let mut added = 0_u64;
+    let mut deleted = 0_u64;
+    let mut in_hunk = false;
+    for line in unified_diff.lines() {
+        if line.starts_with("@@ ") {
+            in_hunk = true;
+            continue;
+        }
+        if !in_hunk {
+            continue;
+        }
+        if line.starts_with('+') {
+            added = added.saturating_add(1);
+        } else if line.starts_with('-') {
+            deleted = deleted.saturating_add(1);
+        }
+    }
+    (added, deleted)
 }
 
 fn write_permissions_for_paths(
@@ -524,6 +585,7 @@ impl ApplyPatchHandler {
         .await
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+                let line_stats = apply_patch_line_stats_for_action(&changes);
                 let tool_ctx = ToolCtx {
                     session,
                     step_context: Arc::clone(&step_context),
@@ -538,12 +600,27 @@ impl ApplyPatchHandler {
                     tool_ctx,
                 )
                 .await?;
-                Ok(boxed_tool_output(ApplyPatchToolOutput::from_text(content)))
+                let hook_metadata = serde_json::json!({
+                    "success": true,
+                    "failure_kind": null,
+                    "auto_fix_flags": [],
+                    "partial_applied": false,
+                    "fallback_recommended": false,
+                    "proposed_added_lines": line_stats.proposed_added_lines,
+                    "proposed_deleted_lines": line_stats.proposed_deleted_lines,
+                    "proposed_changed_files": line_stats.proposed_changed_files,
+                    "accepted_added_lines": line_stats.accepted_added_lines,
+                    "accepted_deleted_lines": line_stats.accepted_deleted_lines,
+                    "accepted_changed_files": line_stats.accepted_changed_files,
+                });
+                Ok(boxed_tool_output(
+                    ApplyPatchToolOutput::from_text_with_hook_metadata(content, hook_metadata),
+                ))
             }
             codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-                Err(FunctionCallError::RespondToModel(format!(
-                    "apply_patch verification failed: {parse_error}"
-                )))
+                Err(FunctionCallError::RespondToModel(
+                    format_apply_patch_verification_error(&parse_error),
+                ))
             }
             codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
                 tracing::trace!("Failed to parse apply_patch input, {error:?}");
@@ -623,11 +700,35 @@ impl CoreToolRuntime for ApplyPatchHandler {
         Some(PostToolUsePayload {
             tool_name: HookToolName::apply_patch(),
             tool_use_id: invocation.call_id.clone(),
-            tool_input: serde_json::json!({
-                "command": apply_patch_payload_command(&invocation.payload)?,
-            }),
+            tool_input: apply_patch_post_tool_input(
+                apply_patch_payload_command(&invocation.payload)?,
+                result.post_tool_use_input(&invocation.payload),
+            ),
             tool_response,
         })
+    }
+}
+
+fn apply_patch_post_tool_input(
+    command: String,
+    metadata: Option<serde_json::Value>,
+) -> serde_json::Value {
+    match metadata {
+        Some(metadata) => serde_json::json!({
+            "command": command,
+            "metadata": metadata,
+        }),
+        None => serde_json::json!({
+            "command": command,
+        }),
+    }
+}
+
+fn format_apply_patch_verification_error(error: &dyn std::fmt::Display) -> String {
+    if error.to_string() == "No files were modified." {
+        "patch rejected: empty patch".to_string()
+    } else {
+        format!("apply_patch verification failed: {error}")
     }
 }
 
@@ -667,11 +768,9 @@ pub(crate) async fn intercept_apply_patch(
                 execute_verified_patch(changes, turn_environment, tracker, tool_ctx).await?;
             Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
         }
-        codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-            Err(FunctionCallError::RespondToModel(format!(
-                "apply_patch verification failed: {parse_error}"
-            )))
-        }
+        codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => Err(
+            FunctionCallError::RespondToModel(format_apply_patch_verification_error(&parse_error)),
+        ),
         codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
             tracing::trace!("Failed to parse apply_patch input, {error:?}");
             Ok(None)

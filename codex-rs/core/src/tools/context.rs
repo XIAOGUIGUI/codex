@@ -286,11 +286,22 @@ impl ToolOutput for FunctionToolOutput {
 
 pub struct ApplyPatchToolOutput {
     pub text: String,
+    pub hook_metadata: Option<JsonValue>,
 }
 
 impl ApplyPatchToolOutput {
     pub fn from_text(text: String) -> Self {
-        Self { text }
+        Self {
+            text,
+            hook_metadata: None,
+        }
+    }
+
+    pub fn from_text_with_hook_metadata(text: String, hook_metadata: JsonValue) -> Self {
+        Self {
+            text,
+            hook_metadata: Some(hook_metadata),
+        }
     }
 }
 
@@ -312,6 +323,10 @@ impl ToolOutput for ApplyPatchToolOutput {
             }],
             Some(true),
         )
+    }
+
+    fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
+        self.hook_metadata.clone()
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
