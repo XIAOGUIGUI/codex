@@ -1,0 +1,15 @@
+---
+source: tui/src/app/tests.rs
+expression: rendered
+---
+• Inherited parent context is hidden in this subagent view. Use /subagents to return to the parent thread.
+
+╭────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.155.1)             │
+│                                        │
+│ model:     gpt-test   /model to change │
+│ directory: /tmp/child                  │
+╰────────────────────────────────────────╯
+
+
+› Child-owned prompt

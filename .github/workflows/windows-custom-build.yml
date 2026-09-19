@@ -13,6 +13,11 @@ on:
         required: true
         default: false
         type: boolean
+      validation_only:
+        description: Run Windows tests only; skip release compilation, packaging, and publishing
+        required: true
+        default: false
+        type: boolean
       direct_publish_run_id:
         description: Existing successful run ID to publish without rebuilding (leave empty for a normal build)
         required: false
@@ -140,9 +145,32 @@ jobs:
           just test -p codex-cli compatibility_diagnostics_cmd
           exit $LASTEXITCODE
 
+      - name: Test subagent history presentation
+        shell: pwsh
+        run: |
+          just test -p codex-app-server subagent_visible_history_tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-tui subagent_thread_switch_marks_inherited_history_as_hidden
+          exit $LASTEXITCODE
+
+      - name: Test app-server integration suite
+        shell: pwsh
+        run: |
+          cargo build -p codex-code-mode-host --bin codex-code-mode-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build -p codex-rmcp-client --bin test_stdio_server
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build -p codex-cli --bin codex
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ${env:CARGO_BIN_EXE_codex-code-mode-host} = "$env:CARGO_TARGET_DIR\debug\codex-code-mode-host.exe"
+          $env:CARGO_BIN_EXE_test_stdio_server = "$env:CARGO_TARGET_DIR\debug\test_stdio_server.exe"
+          $env:CARGO_BIN_EXE_codex = "$env:CARGO_TARGET_DIR\debug\codex.exe"
+          just test -p codex-app-server
+          exit $LASTEXITCODE
+
   build:
     name: Build Windows x64 overlay
-    if: ${{ inputs.direct_publish_run_id == '' }}
+    if: ${{ inputs.direct_publish_run_id == '' && !inputs.validation_only }}
     runs-on: windows-2025
     timeout-minutes: 180
     outputs:
@@ -442,7 +470,7 @@ jobs:
     if: >-
       ${{ always() && (
         (inputs.direct_publish_run_id != '' && inputs.publish_npm) ||
-        (inputs.direct_publish_run_id == '' && needs.test.result == 'success' && needs.build.result == 'success')
+        (inputs.direct_publish_run_id == '' && !inputs.validation_only && needs.test.result == 'success' && needs.build.result == 'success')
       ) }}
     runs-on: windows-2025
     timeout-minutes: 20

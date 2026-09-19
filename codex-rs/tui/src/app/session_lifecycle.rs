@@ -725,6 +725,15 @@ impl App {
         self.pending_thread_switch_resets += 1;
         self.app_event_tx
             .send(AppEvent::ResetTranscriptForThreadSwitch);
+        if self.primary_thread_id != Some(thread_id)
+            && self.agent_navigation.get(&thread_id).is_some()
+            && !self.side_threads.contains_key(&thread_id)
+        {
+            self.chat_widget.add_info_message(
+                "Inherited parent context is hidden in this subagent view.".to_string(),
+                Some("Use /subagents to return to the parent thread.".to_string()),
+            );
+        }
         self.replay_thread_snapshot(snapshot, resume_restored_queue);
         if external_writer {
             self.chat_widget.show_external_writer_thread();

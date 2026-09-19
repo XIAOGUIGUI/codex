@@ -6443,6 +6443,67 @@ async fn snapshot_thread_switch_discards_queued_previous_history() -> Result<()>
     Ok(())
 }
 
+#[tokio::test]
+async fn subagent_thread_switch_marks_inherited_history_as_hidden() -> Result<()> {
+    let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
+    app.local_settings.tui.show_tooltips = false;
+    let parent_thread_id = ThreadId::new();
+    let child_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(parent_thread_id);
+    app.active_thread_id = Some(child_thread_id);
+    app.agent_navigation
+        .record_sub_agent_activity(SubAgentActivityDisplay {
+            thread_id: child_thread_id,
+            agent_path: "/root/worker".to_string(),
+            is_running_hint: true,
+        });
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.render_thread_snapshot(
+        &mut tui,
+        &app_server,
+        child_thread_id,
+        ThreadEventSnapshot {
+            delegated_turns: Vec::new(),
+            session: Some(test_thread_session(
+                child_thread_id,
+                test_path_buf("/tmp/child"),
+            )),
+            turns: vec![test_turn(
+                "child-turn",
+                TurnStatus::Completed,
+                vec![ThreadItem::UserMessage {
+                    id: "child-user".to_string(),
+                    client_id: None,
+                    content: vec![AppServerUserInput::Text {
+                        text: "Child-owned prompt".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+            )],
+            events: Vec::new(),
+            active_reasoning_item: None,
+            input_state: None,
+        },
+        /*resume_restored_queue*/ false,
+    )?;
+    while let Ok(event) = events.try_recv() {
+        app.handle_event(&mut tui, &mut app_server, event).await?;
+    }
+
+    let rendered = app
+        .render_transcript_lines_for_reflow(/*width*/ 80)
+        .lines
+        .iter()
+        .map(rendered_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!(rendered);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
 fn rendered_line_text(line: &crate::terminal_hyperlinks::HyperlinkLine) -> String {
     line.line
         .spans

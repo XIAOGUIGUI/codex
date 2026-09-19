@@ -5751,7 +5751,7 @@ fn build_thread_turns_page_response(
     options: ThreadTurnsPageOptions<'_>,
 ) -> Result<ThreadTurnsListResponse, JSONRPCErrorError> {
     let mut turns = reconstruct_thread_turns_for_turns_list(
-        items,
+        super::thread_lifecycle::visible_thread_history(items),
         loaded_status,
         has_live_running_thread,
         active_turn,

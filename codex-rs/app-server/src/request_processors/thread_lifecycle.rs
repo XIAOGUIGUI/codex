@@ -841,11 +841,30 @@ pub(crate) fn populate_thread_turns_from_history(
     items: &[RolloutItem],
     active_turn: Option<&Turn>,
 ) {
-    let mut turns = build_legacy_api_turns_from_rollout_items(items);
+    let mut turns = build_legacy_api_turns_from_rollout_items(visible_thread_history(items));
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
     }
     thread.turns = turns;
+}
+
+/// Returns the rollout suffix owned by this thread rather than context copied from its parent.
+///
+/// Subagent rollouts keep inherited context so the child model can continue from the parent's
+/// state. The canonical session metadata records the first child-owned ordinal; API history must
+/// not expose the copied prefix as if the child had produced it. Older rollouts without the
+/// boundary retain their legacy presentation because guessing could hide child-authored turns.
+pub(super) fn visible_thread_history(items: &[RolloutItem]) -> &[RolloutItem] {
+    let Some(RolloutItem::SessionMeta(session_meta)) = items.first() else {
+        return items;
+    };
+    let Some(start_ordinal) = session_meta.meta.subagent_history_start_ordinal else {
+        return items;
+    };
+    let Ok(start_index) = usize::try_from(start_ordinal) else {
+        return items;
+    };
+    items.get(start_index..).unwrap_or(items)
 }
 
 pub(super) async fn resolve_pending_server_request(

@@ -36,9 +36,10 @@ runs:
           ${{ steps.environment.outputs.cargo-home }}/registry
           ${{ steps.environment.outputs.cargo-home }}/git
           ${{ env.CARGO_TARGET_DIR }}
-        key: windows-overlay-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.environment.outputs.fingerprint }}-${{ hashFiles('codex-rs/**/Cargo.toml', 'codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', 'codex-rs/.cargo/config.toml', '.github/workflows/windows-custom-build.yml', '.github/actions/**') }}-${{ github.sha }}
+        key: windows-overlay-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.environment.outputs.fingerprint }}-${{ hashFiles('codex-rs/**/Cargo.toml', 'codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', 'codex-rs/.cargo/config.toml', '.github/workflows/windows-custom-build.yml', '.github/actions/cache-windows-overlay/**', '.github/actions/setup-ci/**', '.github/actions/setup-msvc-env/**', '.github/actions/setup-rusty-v8/**') }}-${{ github.sha }}
         restore-keys: |
-          windows-overlay-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.environment.outputs.fingerprint }}-${{ hashFiles('codex-rs/**/Cargo.toml', 'codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', 'codex-rs/.cargo/config.toml', '.github/workflows/windows-custom-build.yml', '.github/actions/**') }}-
+          windows-overlay-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.environment.outputs.fingerprint }}-${{ hashFiles('codex-rs/**/Cargo.toml', 'codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', 'codex-rs/.cargo/config.toml', '.github/workflows/windows-custom-build.yml', '.github/actions/cache-windows-overlay/**', '.github/actions/setup-ci/**', '.github/actions/setup-msvc-env/**', '.github/actions/setup-rusty-v8/**') }}-
+          windows-overlay-v1-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.environment.outputs.fingerprint }}-
 
     - name: Report cache reuse
       shell: bash

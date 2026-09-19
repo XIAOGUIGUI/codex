@@ -36,6 +36,77 @@ mod thread_list_cwd_filter_tests {
     }
 }
 
+mod subagent_visible_history_tests {
+    use super::super::super::thread_lifecycle::visible_thread_history;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::TurnStartedEvent;
+    use codex_rollout::RolloutItem;
+    use pretty_assertions::assert_eq;
+    use serde_json::to_value;
+
+    fn turn_started(turn_id: &str) -> RolloutItem {
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_id.to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }))
+    }
+
+    fn session_meta(subagent_history_start_ordinal: Option<u64>) -> RolloutItem {
+        let thread_id = ThreadId::new();
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: thread_id.into(),
+                id: thread_id,
+                subagent_history_start_ordinal,
+                ..SessionMeta::default()
+            },
+            git: None,
+        })
+    }
+
+    #[test]
+    fn subagent_history_hides_inherited_prefix() {
+        let child_turn = turn_started("child-turn");
+        let items = vec![
+            session_meta(Some(3)),
+            turn_started("parent-turn-1"),
+            turn_started("parent-turn-2"),
+            child_turn.clone(),
+        ];
+
+        assert_eq!(
+            to_value(visible_thread_history(&items)).expect("serialize visible history"),
+            to_value([child_turn]).expect("serialize expected history"),
+        );
+    }
+
+    #[test]
+    fn legacy_history_without_boundary_remains_visible() {
+        let items = vec![session_meta(None), turn_started("legacy-turn")];
+
+        assert_eq!(
+            to_value(visible_thread_history(&items)).expect("serialize visible history"),
+            to_value(&items).expect("serialize expected history"),
+        );
+    }
+
+    #[test]
+    fn invalid_boundary_does_not_hide_child_history() {
+        let items = vec![session_meta(Some(99)), turn_started("child-turn")];
+
+        assert_eq!(
+            to_value(visible_thread_history(&items)).expect("serialize visible history"),
+            to_value(&items).expect("serialize expected history"),
+        );
+    }
+}
+
 mod background_terminal_pagination_tests {
     use super::super::paginate_background_terminals;
     use codex_app_server_protocol::ThreadBackgroundTerminal;
@@ -610,6 +681,7 @@ mod thread_processor_behavior_tests {
             requires_openai_auth: false,
             supports_websockets: true,
             supports_standalone_web_search: false,
+            namespace_tools: None,
         };
         let config_manager = ConfigManager::new(
             temp_dir.path().to_path_buf(),
