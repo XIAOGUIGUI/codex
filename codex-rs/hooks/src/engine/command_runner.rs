@@ -377,7 +377,6 @@ async fn run_command_with_output_limit(
                 },
             )
         }
-        Ok(Err((outcome, error))) => finish_command_run(
         Ok(Err((outcome, error))) => {
             let _ = child.kill().await;
             finish_command_run(

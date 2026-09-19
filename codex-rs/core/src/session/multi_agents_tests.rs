@@ -1,10 +1,12 @@
 use super::multi_agents::effective_multi_agent_mode;
+use super::step_context::StepContext;
 use super::tests::make_session_and_context;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn custom_providers_default_to_proactive_delegation() {
@@ -18,8 +20,9 @@ async fn custom_providers_default_to_proactive_delegation() {
         },
         /*auth_manager*/ None,
     );
+    let step_context = StepContext::for_test(Arc::new(turn));
     assert_eq!(
-        effective_multi_agent_mode(&turn),
+        effective_multi_agent_mode(&step_context),
         Some(MultiAgentMode::Proactive)
     );
 }

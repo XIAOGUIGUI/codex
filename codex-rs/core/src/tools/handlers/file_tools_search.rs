@@ -197,6 +197,7 @@ async fn run_rg(
         .get_exec_backend()
         .start(ExecParams {
             process_id: ProcessId::from(format!("file-tool-{}", Uuid::new_v4())),
+            metadata: None,
             argv,
             cwd: environment.cwd().clone(),
             env_policy: Some(ExecEnvPolicy {

@@ -6,6 +6,7 @@ on:
       patch_revision:
         description: Patch package revision appended to the Codex version
         required: true
+        default: "1"
         type: string
       publish_npm:
         description: Publish the generated package to npm

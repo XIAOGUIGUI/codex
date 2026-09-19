@@ -342,7 +342,8 @@ async fn file_mutation_history_limit_accepts_boundary_and_rejects_overflow_befor
     ));
     let step_context = step_context.with_tool_router_for_test(router);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), step_context, tracker);
+    let tool_runtime =
+        ToolCallRuntime::new(Arc::clone(&session), Arc::clone(&step_context), tracker);
     let boundary_item = ResponseItem::FunctionCall {
         id: None,
         name: "write_file".to_string(),
@@ -354,7 +355,7 @@ async fn file_mutation_history_limit_accepts_boundary_and_rejects_overflow_befor
     };
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&session),
-        turn_context: Arc::clone(&turn_context),
+        step_context,
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime: tool_runtime.clone(),
         tool_call_loop_detector: Arc::new(crate::tools::tool_call_loop::ToolCallLoopDetector::new(

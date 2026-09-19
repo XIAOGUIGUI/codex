@@ -3103,8 +3103,11 @@ impl Session {
             hook_outcome.hook_events,
         )
         .await;
-        if hook_outcome.response.is_some() {
-            return hook_outcome.response;
+        if let Some(response) = hook_outcome.response {
+            return Some(AcceptedUserInputResponse {
+                response,
+                acceptance_order: self.reserve_user_input_order().await,
+            });
         }
 
         let sub_id = turn_context.sub_id.clone();
