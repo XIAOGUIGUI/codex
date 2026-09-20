@@ -23,16 +23,34 @@ const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 const PERSONALITY_SECTION_HEADER: &str = "# Personality";
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
-    if let Some(context_window) = config.model_context_window {
+    let adaptive = config.context_management.auto_compact.as_ref();
+    let profile = adaptive.and_then(|adaptive| adaptive.models.get(&model.slug));
+    if let Some(context_window) = profile
+        .and_then(|profile| profile.context_window)
+        .or(config.model_context_window)
+    {
         model.context_window = Some(
-            model
-                .max_context_window
-                .map_or(context_window, |max_context_window| {
-                    context_window.min(max_context_window)
-                }),
+            if profile.and_then(|profile| profile.context_window).is_some() {
+                context_window
+            } else {
+                model
+                    .max_context_window
+                    .map_or(context_window, |max_context_window| {
+                        context_window.min(max_context_window)
+                    })
+            },
         );
     }
-    if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
+    if let Some(auto_compact_token_limit) = profile
+        .and_then(|profile| profile.trigger_tokens)
+        .or_else(|| {
+            if adaptive.is_none() {
+                config.model_auto_compact_token_limit
+            } else {
+                None
+            }
+        })
+    {
         model.auto_compact_token_limit = Some(auto_compact_token_limit);
     }
     if let Some(token_limit) = config.tool_output_token_limit {

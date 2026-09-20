@@ -6,6 +6,33 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AdaptiveAutoCompactConfig": {
+      "description": "Model-aware automatic compaction settings.",
+      "properties": {
+        "max_trigger_tokens": {
+          "default": 300000,
+          "description": "Economic ceiling applied after the percentage-based trigger is calculated.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "models": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ModelContextProfile"
+          },
+          "default": {},
+          "description": "Exact model-slug overrides for third-party variants and aliases.",
+          "type": "object"
+        },
+        "trigger_percent": {
+          "default": 75,
+          "description": "Percentage of the active model's context window used as the trigger.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -1220,6 +1247,32 @@
       },
       "type": "object"
     },
+    "ContextManagementConfig": {
+      "description": "Context-window management settings.",
+      "properties": {
+        "auto_compact": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AdaptiveAutoCompactConfig"
+            }
+          ],
+          "default": null
+        },
+        "tool_output_spill": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolOutputSpillConfig"
+            }
+          ],
+          "default": {
+            "enabled": false,
+            "preview_bytes": 1024,
+            "threshold_bytes": 8192
+          }
+        }
+      },
+      "type": "object"
+    },
     "ContextManagementConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -2285,6 +2338,24 @@
         "format": "uint32",
         "minimum": 0.0,
         "type": "integer"
+      },
+      "type": "object"
+    },
+    "ModelContextProfile": {
+      "description": "Optional exact overrides for one model slug.",
+      "properties": {
+        "context_window": {
+          "default": null,
+          "description": "Context window advertised by this model variant.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "trigger_tokens": {
+          "default": null,
+          "description": "Absolute token usage that triggers automatic compaction.",
+          "format": "int64",
+          "type": "integer"
+        }
       },
       "type": "object"
     },
@@ -3885,6 +3956,28 @@
           "type": "string"
         }
       ]
+    },
+    "ToolOutputSpillConfig": {
+      "description": "Bounds large plain-text tool results in model-visible history while retaining the full output in a local file.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "preview_bytes": {
+          "default": 1024,
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "threshold_bytes": {
+          "default": 8192,
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "ToolRegistryConfigToml": {
       "additionalProperties": false,
@@ -6149,6 +6242,14 @@
     },
     "computer_use": {
       "$ref": "#/definitions/ComputerUseConfigToml"
+    },
+    "context_management": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ContextManagementConfig"
+        }
+      ],
+      "description": "Model-aware context-window and automatic compaction settings."
     },
     "default_permissions": {
       "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",

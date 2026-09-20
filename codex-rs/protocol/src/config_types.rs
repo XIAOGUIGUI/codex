@@ -54,6 +54,141 @@ pub enum AutoCompactTokenLimitScope {
     BodyAfterPrefix,
 }
 
+const fn default_auto_compact_trigger_percent() -> u8 {
+    75
+}
+
+const fn default_auto_compact_max_trigger_tokens() -> i64 {
+    300_000
+}
+
+const fn default_tool_output_spill_threshold_bytes() -> usize {
+    8 * 1024
+}
+
+const fn default_tool_output_spill_preview_bytes() -> usize {
+    1024
+}
+
+/// Optional exact overrides for one model slug.
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(default)]
+pub struct ModelContextProfile {
+    /// Context window advertised by this model variant.
+    pub context_window: Option<i64>,
+    /// Absolute token usage that triggers automatic compaction.
+    pub trigger_tokens: Option<i64>,
+}
+
+/// Model-aware automatic compaction settings.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(default)]
+pub struct AdaptiveAutoCompactConfig {
+    /// Percentage of the active model's context window used as the trigger.
+    pub trigger_percent: u8,
+    /// Economic ceiling applied after the percentage-based trigger is calculated.
+    pub max_trigger_tokens: i64,
+    /// Exact model-slug overrides for third-party variants and aliases.
+    pub models: HashMap<String, ModelContextProfile>,
+}
+
+impl Default for AdaptiveAutoCompactConfig {
+    fn default() -> Self {
+        Self {
+            trigger_percent: default_auto_compact_trigger_percent(),
+            max_trigger_tokens: default_auto_compact_max_trigger_tokens(),
+            models: HashMap::new(),
+        }
+    }
+}
+
+impl AdaptiveAutoCompactConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=90).contains(&self.trigger_percent) {
+            return Err(
+                "context_management.auto_compact.trigger_percent must be between 1 and 90"
+                    .to_string(),
+            );
+        }
+        if self.max_trigger_tokens <= 0 {
+            return Err(
+                "context_management.auto_compact.max_trigger_tokens must be positive".to_string(),
+            );
+        }
+        for (model, profile) in &self.models {
+            if model.trim().is_empty() {
+                return Err(
+                    "context_management.auto_compact.models keys must not be empty".to_string(),
+                );
+            }
+            if profile.context_window.is_some_and(|tokens| tokens <= 0) {
+                return Err(format!(
+                    "context_management.auto_compact.models.{model}.context_window must be positive"
+                ));
+            }
+            if profile.trigger_tokens.is_some_and(|tokens| tokens <= 0) {
+                return Err(format!(
+                    "context_management.auto_compact.models.{model}.trigger_tokens must be positive"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Bounds large plain-text tool results in model-visible history while retaining the full output
+/// in a local file.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(default)]
+pub struct ToolOutputSpillConfig {
+    pub enabled: bool,
+    pub threshold_bytes: usize,
+    pub preview_bytes: usize,
+}
+
+impl Default for ToolOutputSpillConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold_bytes: default_tool_output_spill_threshold_bytes(),
+            preview_bytes: default_tool_output_spill_preview_bytes(),
+        }
+    }
+}
+
+impl ToolOutputSpillConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.threshold_bytes <= self.preview_bytes {
+            return Err("context_management.tool_output_spill.threshold_bytes must be greater than preview_bytes".to_string());
+        }
+        if self.preview_bytes == 0 || self.preview_bytes > 1024 {
+            return Err(
+                "context_management.tool_output_spill.preview_bytes must be between 1 and 1024"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Context-window management settings.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(default)]
+#[derive(Default)]
+pub struct ContextManagementConfig {
+    pub auto_compact: Option<AdaptiveAutoCompactConfig>,
+    pub tool_output_spill: ToolOutputSpillConfig,
+}
+
+impl ContextManagementConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(auto_compact) = &self.auto_compact {
+            auto_compact.validate()?;
+        }
+        self.tool_output_spill.validate()
+    }
+}
+
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
@@ -913,6 +1048,25 @@ mod tests {
         for mode in TUI_VISIBLE_COLLABORATION_MODES {
             assert!(mode.is_tui_visible());
         }
+    }
+
+    #[test]
+    fn context_management_rejects_oversized_model_visible_previews() {
+        let config = ContextManagementConfig {
+            tool_output_spill: ToolOutputSpillConfig {
+                preview_bytes: 1025,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.validate(),
+            Err(
+                "context_management.tool_output_spill.preview_bytes must be between 1 and 1024"
+                    .to_string()
+            )
+        );
     }
 
     #[test]

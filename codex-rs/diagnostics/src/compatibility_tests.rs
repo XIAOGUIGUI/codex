@@ -161,8 +161,13 @@ fn report_contains_only_bounded_structured_failure_data() {
             instruction_bytes: 100,
             input_tokens: 400,
             cached_input_tokens: 300,
+            uncached_input_tokens: 100,
             output_tokens: 20,
             reasoning_output_tokens: 10,
+            peak_active_context_tokens: 350,
+            peak_auto_compact_scope_tokens: 250,
+            auto_compact_scope_limit: 500,
+            full_context_window_limit: 600,
         },
     );
     recorder.record(CompatibilityEventInput {
@@ -196,8 +201,13 @@ fn report_contains_only_bounded_structured_failure_data() {
             instruction_bytes: 100,
             input_tokens: 400,
             cached_input_tokens: 300,
+            uncached_input_tokens: 100,
             output_tokens: 20,
             reasoning_output_tokens: 10,
+            peak_active_context_tokens: 350,
+            peak_auto_compact_scope_tokens: 250,
+            auto_compact_scope_limit: 500,
+            full_context_window_limit: 600,
         }
     );
 

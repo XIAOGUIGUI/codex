@@ -4,6 +4,10 @@ use crate::config::Config;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::openai_models::ModelInfo;
 
+#[cfg(test)]
+#[path = "context_window_tests.rs"]
+mod tests;
+
 #[derive(Debug)]
 pub(crate) struct ContextWindowTokenStatus {
     // Full active context usage, independent of the configured auto-compact scope.
@@ -20,6 +24,29 @@ pub(crate) struct ContextWindowTokenStatus {
 
 fn tokens_remaining(limit: Option<i64>, used: i64) -> Option<i64> {
     limit.map(|limit| limit.saturating_sub(used).max(0))
+}
+
+pub(crate) fn auto_compact_token_limit(config: &Config, model_info: &ModelInfo) -> Option<i64> {
+    let Some(adaptive) = config.context_management.auto_compact.as_ref() else {
+        return model_info.auto_compact_token_limit();
+    };
+    let configured_limit = adaptive
+        .models
+        .get(&model_info.slug)
+        .and_then(|profile| profile.trigger_tokens)
+        .or_else(|| {
+            model_info.resolved_context_window().map(|context_window| {
+                context_window.saturating_mul(i64::from(adaptive.trigger_percent)) / 100
+            })
+        })
+        .map(|limit| limit.min(adaptive.max_trigger_tokens));
+    match (configured_limit, model_info.resolved_context_window()) {
+        (Some(limit), Some(context_window)) => {
+            Some(limit.min(context_window.saturating_mul(9) / 10))
+        }
+        (Some(limit), None) => Some(limit),
+        (None, _) => model_info.auto_compact_token_limit(),
+    }
 }
 
 pub(crate) async fn context_window_token_status(
@@ -61,7 +88,7 @@ async fn context_window_token_status_with_config(
         match config.model_auto_compact_token_limit_scope {
             AutoCompactTokenLimitScope::Total => (
                 active_context_tokens,
-                model_info.auto_compact_token_limit(),
+                auto_compact_token_limit(config, model_info),
                 None,
             ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
@@ -70,7 +97,8 @@ async fn context_window_token_status_with_config(
 
                 let scope_limit = config
                     .model_auto_compact_token_limit
-                    .or_else(|| model_info.auto_compact_token_limit());
+                    .filter(|_| config.context_management.auto_compact.is_none())
+                    .or_else(|| auto_compact_token_limit(config, model_info));
                 (
                     active_context_tokens.saturating_sub(baseline),
                     scope_limit,

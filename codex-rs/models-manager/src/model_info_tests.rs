@@ -1,5 +1,8 @@
 use super::*;
 use crate::ModelsManagerConfig;
+use codex_protocol::config_types::AdaptiveAutoCompactConfig;
+use codex_protocol::config_types::ContextManagementConfig;
+use codex_protocol::config_types::ModelContextProfile;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
@@ -14,6 +17,7 @@ use codex_protocol::openai_models::PermissionMessages;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMessages;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 
 fn config_with_personality(personality: Option<Personality>) -> ModelsManagerConfig {
     ModelsManagerConfig {
@@ -350,4 +354,43 @@ fn model_context_window_uses_model_value_without_override() {
     let updated = with_config_overrides(model.clone(), &config);
 
     assert_eq!(updated, model);
+}
+
+#[test]
+fn exact_model_profile_can_advertise_a_larger_third_party_context_window() {
+    let mut model = model_info_from_slug("glm-5.2[1m]");
+    model.context_window = Some(200_000);
+    model.max_context_window = Some(200_000);
+    let profile = ModelContextProfile {
+        context_window: Some(1_000_000),
+        trigger_tokens: Some(280_000),
+    };
+    let config = ModelsManagerConfig {
+        context_management: ContextManagementConfig {
+            auto_compact: Some(AdaptiveAutoCompactConfig {
+                models: HashMap::from([("glm-5.2[1m]".to_string(), profile)]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model, &config);
+
+    assert_eq!(updated.context_window, Some(1_000_000));
+    assert_eq!(updated.auto_compact_token_limit, Some(280_000));
+}
+
+#[test]
+fn legacy_fixed_auto_compact_override_remains_compatible() {
+    let model = model_info_from_slug("unknown-model");
+    let config = ModelsManagerConfig {
+        model_auto_compact_token_limit: Some(123_000),
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model, &config);
+
+    assert_eq!(updated.auto_compact_token_limit, Some(123_000));
 }

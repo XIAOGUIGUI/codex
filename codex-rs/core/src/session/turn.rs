@@ -1367,10 +1367,11 @@ async fn maybe_run_previous_model_inline_compact(
         .model_auto_compact_token_limit_scope
     {
         AutoCompactTokenLimitScope::Total => {
-            let new_auto_compact_limit = turn_context
-                .model_info()
-                .auto_compact_token_limit()
-                .unwrap_or(i64::MAX);
+            let new_auto_compact_limit = super::context_window::auto_compact_token_limit(
+                &turn_context.config,
+                turn_context.model_info(),
+            )
+            .unwrap_or(i64::MAX);
             active_context_tokens > new_auto_compact_limit
                 || active_context_tokens >= new_context_window
         }
@@ -1613,6 +1614,19 @@ async fn run_sampling_request(
         let tool_schema_bytes =
             serde_json::to_vec(prompt.tools.as_ref()).map_or(0, |value| value.len());
         let instruction_bytes = prompt.base_instructions.text.len();
+        let context_window_status = if sess.services.compatibility_diagnostics.is_enabled() {
+            Some(
+                super::context_window::context_window_token_status_for_model(
+                    sess.as_ref(),
+                    turn_context.config.as_ref(),
+                    turn_context.as_ref(),
+                    &step_context.settings.model_info,
+                )
+                .await,
+            )
+        } else {
+            None
+        };
         let attempt_started = Instant::now();
         let attempt_result = try_run_sampling_request(
             tool_runtime.clone(),
@@ -1633,6 +1647,7 @@ async fn run_sampling_request(
                 history_bytes,
                 tool_schema_bytes,
                 instruction_bytes,
+                context_window_status.as_ref(),
             );
             let request_bytes = history_bytes
                 .saturating_add(tool_schema_bytes)
@@ -1718,6 +1733,7 @@ fn sampling_metrics(
     history_bytes: usize,
     tool_schema_bytes: usize,
     instruction_bytes: usize,
+    context_window_status: Option<&super::context_window::ContextWindowTokenStatus>,
 ) -> CompatibilityMetrics {
     let usage = result
         .as_ref()
@@ -1726,14 +1742,27 @@ fn sampling_metrics(
         .cloned()
         .unwrap_or_default();
     let non_negative = |value: i64| u64::try_from(value.max(0)).unwrap_or(u64::MAX);
+    let input_tokens = non_negative(usage.input_tokens);
+    let cached_input_tokens = non_negative(usage.cached_input_tokens);
     CompatibilityMetrics {
         history_bytes: u64::try_from(history_bytes).unwrap_or(u64::MAX),
         tool_schema_bytes: u64::try_from(tool_schema_bytes).unwrap_or(u64::MAX),
         instruction_bytes: u64::try_from(instruction_bytes).unwrap_or(u64::MAX),
-        input_tokens: non_negative(usage.input_tokens),
-        cached_input_tokens: non_negative(usage.cached_input_tokens),
+        input_tokens,
+        cached_input_tokens,
+        uncached_input_tokens: input_tokens.saturating_sub(cached_input_tokens),
         output_tokens: non_negative(usage.output_tokens),
         reasoning_output_tokens: non_negative(usage.reasoning_output_tokens),
+        peak_active_context_tokens: context_window_status
+            .map_or(0, |status| non_negative(status.active_context_tokens)),
+        peak_auto_compact_scope_tokens: context_window_status
+            .map_or(0, |status| non_negative(status.auto_compact_scope_tokens)),
+        auto_compact_scope_limit: context_window_status
+            .and_then(|status| status.auto_compact_scope_limit)
+            .map_or(0, non_negative),
+        full_context_window_limit: context_window_status
+            .and_then(|status| status.full_context_window_limit)
+            .map_or(0, non_negative),
     }
 }
 

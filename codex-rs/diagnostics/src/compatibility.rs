@@ -141,14 +141,20 @@ pub struct CompatibilityEventInput<'a> {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
 pub struct CompatibilityMetrics {
     pub history_bytes: u64,
     pub tool_schema_bytes: u64,
     pub instruction_bytes: u64,
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
+    pub uncached_input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_output_tokens: u64,
+    pub peak_active_context_tokens: u64,
+    pub peak_auto_compact_scope_tokens: u64,
+    pub auto_compact_scope_limit: u64,
+    pub full_context_window_limit: u64,
 }
 
 impl CompatibilityMetrics {
@@ -164,10 +170,25 @@ impl CompatibilityMetrics {
         self.cached_input_tokens = self
             .cached_input_tokens
             .saturating_add(other.cached_input_tokens);
+        self.uncached_input_tokens = self
+            .uncached_input_tokens
+            .saturating_add(other.uncached_input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.reasoning_output_tokens = self
             .reasoning_output_tokens
             .saturating_add(other.reasoning_output_tokens);
+        self.peak_active_context_tokens = self
+            .peak_active_context_tokens
+            .max(other.peak_active_context_tokens);
+        self.peak_auto_compact_scope_tokens = self
+            .peak_auto_compact_scope_tokens
+            .max(other.peak_auto_compact_scope_tokens);
+        self.auto_compact_scope_limit = self
+            .auto_compact_scope_limit
+            .max(other.auto_compact_scope_limit);
+        self.full_context_window_limit = self
+            .full_context_window_limit
+            .max(other.full_context_window_limit);
     }
 }
 

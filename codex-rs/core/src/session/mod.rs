@@ -250,6 +250,7 @@ pub(crate) mod step_settings;
 mod thread_settings;
 pub(crate) mod time_reminder;
 mod token_budget;
+mod tool_output_spill;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
 mod turn_input;
@@ -3532,6 +3533,14 @@ impl Session {
         mut items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
     ) {
+        tool_output_spill::spill_large_tool_outputs(
+            turn_context.config.codex_home.as_path(),
+            self.thread_id,
+            &turn_context.config.context_management.tool_output_spill,
+            &self.services.compatibility_diagnostics,
+            &mut items,
+        )
+        .await;
         // Save the originating history budget for replay.
         // Preserve any existing tool-specific override.
         let policy: codex_utils_output_truncation::TruncationPolicy =

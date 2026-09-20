@@ -639,6 +639,9 @@ pub struct Config {
     /// active context or only tokens after the carried compaction-window prefix.
     pub model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope,
 
+    /// Model-aware context-window and automatic compaction settings.
+    pub context_management: codex_protocol::config_types::ContextManagementConfig,
+
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
 
@@ -1626,6 +1629,7 @@ impl Config {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
             model_auto_compact_token_limit: self.model_auto_compact_token_limit,
+            context_management: self.context_management.clone(),
             tool_output_token_limit: self.tool_output_token_limit,
             base_instructions: self.base_instructions.clone().filter(|_| {
                 !matches!(
@@ -4182,6 +4186,11 @@ impl Config {
         )
         .map_err(std::io::Error::from)?;
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
+        if let Some(context_management) = cfg.context_management.as_ref() {
+            context_management.validate().map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+            })?;
+        }
         let config = Self {
             model,
             service_tier,
@@ -4191,6 +4200,7 @@ impl Config {
             model_auto_compact_token_limit_scope: cfg
                 .model_auto_compact_token_limit_scope
                 .unwrap_or_default(),
+            context_management: cfg.context_management.unwrap_or_default(),
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
