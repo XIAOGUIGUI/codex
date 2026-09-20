@@ -123,6 +123,12 @@ jobs:
       - name: Test token-efficiency safeguards
         shell: pwsh
         run: |
+          just test -p codex-models-manager
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-core context_window::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          just test -p codex-core tool_output_spill::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           just test -p codex-core file_tools_read_history
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           just test -p codex-core adjacent_small_reads_expand_and_overlapping_reads_reuse_history
