@@ -19,21 +19,11 @@ use codex_protocol::models::MessagePhase;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 
-fn normalize_voice_snapshot_directory(rendered: &str, cwd: &Path) -> String {
-    let cwd = cwd.display().to_string();
-    let placeholder = "/tmp/project";
-    let padded_placeholder = format!(
-        "{placeholder}{}",
-        " ".repeat(cwd.len().saturating_sub(placeholder.len()))
-    );
-    rendered.replace(&cwd, &padded_placeholder)
-}
-
 #[test]
 fn voice_snapshot_directory_keeps_header_width_for_windows_paths() {
     let rendered = "│ directory: C:\\tmp\\project              │";
     assert_eq!(
-        normalize_voice_snapshot_directory(rendered, Path::new("C:\\tmp\\project")),
+        normalize_snapshot_directory(rendered, Path::new("C:\\tmp\\project"), "/tmp/project"),
         "│ directory: /tmp/project                │"
     );
 }
@@ -366,7 +356,7 @@ async fn switching_threads_keeps_the_source_voice_partial_only_on_reattach() {
     assert_eq!(rendered.matches("spoken partial completed").count(), 1);
     insta::assert_snapshot!(
         "voice_partial_completed_after_thread_switch",
-        normalize_voice_snapshot_directory(&rendered, &app.config.cwd)
+        normalize_snapshot_directory(&rendered, &app.config.cwd, "/tmp/project")
     );
     while let Ok(event) = side_events.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {
@@ -583,7 +573,7 @@ async fn replay_reconciles_only_matching_voice_captions_one_for_one() {
     assert_eq!(rendered.matches("different caption").count(), 1);
     insta::assert_snapshot!(
         "voice_replay_reconciles_matching_captions",
-        normalize_voice_snapshot_directory(&rendered, &app.config.cwd)
+        normalize_snapshot_directory(&rendered, &app.config.cwd, "/tmp/project")
     );
 }
 
@@ -751,7 +741,7 @@ async fn buffered_voice_items_reconcile_captions_after_thread_switch() {
     assert_eq!(rendered.matches("buffered answer").count(), 1);
     insta::assert_snapshot!(
         "voice_buffered_replay_reconciles_captions",
-        normalize_voice_snapshot_directory(&rendered, &app.config.cwd)
+        normalize_snapshot_directory(&rendered, &app.config.cwd, "/tmp/project")
     );
 }
 
@@ -931,7 +921,7 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
         if cycle == 0 {
             insta::assert_snapshot!(
                 "voice_completed_after_thread_switch",
-                normalize_voice_snapshot_directory(&rendered, &app.config.cwd)
+                normalize_snapshot_directory(&rendered, &app.config.cwd, "/tmp/project")
             );
         }
     }

@@ -209,6 +209,19 @@ fn test_absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
 }
 
+fn normalize_snapshot_directory(rendered: &str, cwd: &Path, placeholder: &str) -> String {
+    let cwd = cwd.display().to_string();
+    let padded_placeholder = format!(
+        "{placeholder}{}",
+        " ".repeat(
+            cwd.chars()
+                .count()
+                .saturating_sub(placeholder.chars().count())
+        )
+    );
+    rendered.replace(&cwd, &padded_placeholder)
+}
+
 #[tokio::test]
 async fn pasted_text_normalizes_mixed_line_endings_at_app_boundary() -> Result<()> {
     let mut app = make_test_app().await;
@@ -6460,16 +6473,14 @@ async fn subagent_thread_switch_marks_inherited_history_as_hidden() -> Result<()
 
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let child_cwd = test_path_buf("/tmp/child");
     app.render_thread_snapshot(
         &mut tui,
         &app_server,
         child_thread_id,
         ThreadEventSnapshot {
             delegated_turns: Vec::new(),
-            session: Some(test_thread_session(
-                child_thread_id,
-                test_path_buf("/tmp/child"),
-            )),
+            session: Some(test_thread_session(child_thread_id, child_cwd.clone())),
             turns: vec![test_turn(
                 "child-turn",
                 TurnStatus::Completed,
@@ -6499,7 +6510,11 @@ async fn subagent_thread_switch_marks_inherited_history_as_hidden() -> Result<()
         .map(rendered_line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert_snapshot!(rendered);
+    assert_snapshot!(normalize_snapshot_directory(
+        &rendered,
+        &child_cwd,
+        "/tmp/child"
+    ));
     app_server.shutdown().await?;
     Ok(())
 }
